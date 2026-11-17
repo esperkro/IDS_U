@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lab 12 — IDS Training</title>
+<link rel="stylesheet" href="module-kit.css">
+<script src="labs-access.js"></script>
+<script>LabsAccess.guard('lab12');</script>
+</head>
+<body>
+<div id="app"><noscript><p style="padding:16px">IDS Training needs JavaScript enabled.</p></noscript></div>
+<script src="module-kit.js"></script>
+<script src="questions.js"></script>
+<script src="assessment.js"></script>
+<script>
+ModuleKit.mount({
+  id: 'lab12',
+  briefing: {
+    hook: 'The best rules in the world can’t detect traffic the sensor never sees. Where you put the sensor decides what your IDS can know.',
+    lead: 'Configuring a NIDS for monitoring means choosing <strong>where</strong> it listens (SPAN port, network TAP or inline), <strong>what</strong> it considers home and external, <strong>which</strong> rules run, how alerts are <strong>thresholded</strong> and suppressed, and <strong>where</strong> the output goes so analysts can act on it.',
+    stats: [
+      { value: 'SPAN / TAP', label: 'Two ways to copy traffic', note: 'A SPAN (mirror) port is a switch feature and may drop packets under load; a TAP is dedicated hardware that copies everything on a link.' },
+      { value: 'Inline', label: 'IPS mode', note: 'In the traffic path the sensor can drop packets — but a failure or a bad rule can also block legitimate traffic.' },
+      { value: 'Suppress', label: 'Tune, don’t disable', note: '<code>threshold.config</code> can limit or suppress a noisy signature for a specific host instead of turning it off everywhere.' }
+    ],
+    objectives: [
+      'Choose sensor placement for different monitoring goals.',
+      'Compare SPAN, TAP and inline deployment.',
+      'Tune alerts with thresholds and targeted suppression.',
+      'Send structured alerts to a SIEM with useful fields.'
+    ],
+    blocks: [{ type: 'myths', items: [
+      { myth: 'Put the IDS outside the firewall to see everything.', fact: 'Outside, you see every internet scan that the firewall blocks anyway — lots of noise, little insight. Inside sensors show what actually got through.' },
+      { myth: 'A SPAN port copies every packet perfectly.', fact: 'Mirroring is best-effort: an oversubscribed SPAN can drop packets, and some switches don’t mirror errored frames. TAPs are more reliable for critical links.' },
+      { myth: 'Disabling a noisy rule is the same as tuning it.', fact: 'Disabling removes coverage everywhere. Suppress by host or threshold the rate so the rule still protects everything else.' }
+    ] }]
+  },
+  scenario: {
+    meta: ['Hospital network', 'Suricata sensors', 'Phase 2 rollout'],
+    title: '40,000 alerts a day',
+    story: '<p>A hospital’s first sensor was placed on the internet side of the firewall and alerts on everything. Analysts say 90% of alerts are “ET SCAN” noise from the internet and a vulnerability scanner the IT team runs every night from <code>10.20.0.15</code>. Meanwhile nobody can see traffic between the clinical workstation VLAN and the server VLAN.</p>',
+    blocks: [
+      { type: 'choice', title: 'Decision 1 — Placement', prompt: 'Where should the next sensor go?', options: [
+        { text: 'Inside the firewall on the core link between the workstation and server VLANs, fed by a TAP or a well-sized SPAN.', verdict: 'good', why: 'It sees what actually crossed the perimeter and — crucially — internal lateral movement towards clinical servers.' },
+        { text: 'A second sensor outside the firewall, for redundancy.', verdict: 'bad', why: 'Doubles the noise without seeing any internal traffic.' },
+        { text: 'On the guest Wi-Fi network.', verdict: 'partial', why: 'Guest Wi-Fi can be worth monitoring, but it isn’t where the critical blind spot is.' }
+      ] },
+      { type: 'choice', title: 'Decision 2 — The scanner noise', prompt: 'How do you handle alerts caused by the IT team’s authorised scanner?', options: [
+        { text: 'Suppress the scan signatures only for source <code>10.20.0.15</code> in <code>threshold.config</code>, documented with an owner and review date.', verdict: 'good', why: 'Targeted suppression removes known-benign noise while the same rules still catch anyone else scanning.' },
+        { text: 'Disable all ET SCAN rules.', verdict: 'bad', why: 'You would also stop seeing a real attacker’s reconnaissance.' },
+        { text: 'Leave it — analysts can learn to ignore that IP.', verdict: 'partial', why: 'Human filtering is error-prone and adds up to hours of wasted triage each week.' }
+      ] }
+    ]
+  },
+  practice: {
+    intro: 'Place sensors for three monitoring goals, then build a sensible tuning configuration.',
+    blocks: [
+      { type: 'custom', title: 'Sensor placement planner', tag: 'Simulator', render: function (host, K) {
+        host.innerHTML = '<svg class="netmap" viewBox="0 0 640 230" role="img" aria-label="Network diagram: Internet, position A, firewall, DMZ with position B, core switch with position C, user VLAN with position D, server VLAN with position E">' +
+          '<g font-size="12" fill="#e8eefc" font-family="system-ui">' +
+          '<rect x="10" y="90" width="80" height="44" rx="8" fill="#1a2440" stroke="#46557f"/><text x="50" y="117" text-anchor="middle">Internet</text>' +
+          '<rect x="170" y="90" width="80" height="44" rx="8" fill="#3b1d26" stroke="#f87171"/><text x="210" y="117" text-anchor="middle">Firewall</text>' +
+          '<rect x="170" y="10" width="80" height="40" rx="8" fill="#1a2440" stroke="#46557f"/><text x="210" y="35" text-anchor="middle">DMZ</text>' +
+          '<rect x="330" y="90" width="90" height="44" rx="8" fill="#1a2440" stroke="#46557f"/><text x="375" y="117" text-anchor="middle">Core switch</text>' +
+          '<rect x="500" y="20" width="120" height="44" rx="8" fill="#1a2440" stroke="#46557f"/><text x="560" y="47" text-anchor="middle">User VLAN</text>' +
+          '<rect x="500" y="160" width="120" height="44" rx="8" fill="#1a2440" stroke="#46557f"/><text x="560" y="187" text-anchor="middle">Server VLAN</text>' +
+          '<path d="M90 112h80M250 112h80M210 90V50M420 105l80-55M420 120l80 55" stroke="#7f8db0" stroke-width="2" fill="none"/>' +
+          '<g fill="#bef264" stroke="#0b1020" font-weight="800">' +
+          '<circle cx="130" cy="112" r="13"/><circle cx="232" cy="70" r="13"/><circle cx="290" cy="112" r="13"/><circle cx="460" cy="78" r="13"/><circle cx="460" cy="148" r="13"/></g>' +
+          '<g fill="#0b1020" font-weight="800" text-anchor="middle"><text x="130" y="117">A</text><text x="232" y="75">B</text><text x="290" y="117">C</text><text x="460" y="83">D</text><text x="460" y="153">E</text></g></g></svg>' +
+          '<p class="small muted">A: outside the firewall · B: DMZ link · C: inside the firewall, before the core · D: core ↔ user VLAN · E: core ↔ server VLAN</p>';
+        var goals = [
+          { g: 'See attacks that actually got through the perimeter firewall.', best: ['C'], ok: ['D', 'E'], why: { C: 'Inside the firewall sees all traffic that the firewall allowed in or out.', D: 'Sees permitted traffic to users but misses DMZ and server-bound flows.', E: 'Sees permitted traffic to servers but not to users.', A: 'Outside sees mostly blocked scans — noise, not what got through.', B: 'Only DMZ traffic.' } },
+          { g: 'Detect lateral movement from workstations to servers.', best: ['E'], ok: ['D'], why: { E: 'The link into the server VLAN carries workstation → server traffic.', D: 'You will see traffic leaving workstations, good, but also lots of internet browsing.', C: 'Internal VLAN-to-VLAN traffic is switched at the core and never passes C.', A: 'Internal traffic never reaches the internet side.', B: 'DMZ traffic only.' } },
+          { g: 'Watch attacks against the public web server.', best: ['B'], ok: ['C'], why: { B: 'The DMZ link carries every request to the public servers.', C: 'Depends on topology — in this diagram the DMZ hangs off the firewall, so C misses it.', A: 'Sees it, but mixed with all blocked internet noise.', D: 'User traffic only.', E: 'Server VLAN only — the web server is in the DMZ.' } }
+        ];
+        goals.forEach(function (g, gi) {
+          var row = K.el('div', { class: 'field', style: 'margin-top:12px' });
+          row.appendChild(K.el('p', { style: 'margin:0', html: '<strong>Goal ' + (gi + 1) + ':</strong> ' + g.g }));
+          var pills = K.el('div', { class: 'pill-row', role: 'group', 'aria-label': 'Sensor position for goal ' + (gi + 1) });
+          var fb = K.el('div', { class: 'feedback', 'aria-live': 'polite' });
+          ['A', 'B', 'C', 'D', 'E'].forEach(function (p) {
+            var b = K.el('button', { type: 'button', class: 'toggle', 'aria-pressed': 'false', text: 'Position ' + p });
+            b.addEventListener('click', function () {
+              K.$$('button', pills).forEach(function (x) { x.setAttribute('aria-pressed', 'false'); });
+              b.setAttribute('aria-pressed', 'true');
+              var v = g.best.indexOf(p) !== -1 ? 'good' : g.ok.indexOf(p) !== -1 ? 'partial' : 'bad';
+              K.setFeedback(fb, v, g.why[p]);
+            });
+            pills.appendChild(b);
+          });
+          row.appendChild(pills); row.appendChild(fb);
+          host.appendChild(row);
+        });
+      } },
+      { type: 'checklist', title: 'Tuning & output configuration', tag: 'Config', scoreLabel: 'Sensor readiness', intro: 'Tick what you would put in place for the hospital’s internal sensor.', items: [
+        { text: '<code>HOME_NET</code> lists all internal hospital ranges', weight: 2, why: 'Directional rules depend on it.' },
+        { text: 'Disable GRO/LRO offloading on the capture NIC (<code>ethtool -K</code>)', weight: 1, why: 'Offloading merges packets and can confuse the sensor’s reassembly.' },
+        { text: '<code>suppress gen_id 1, sig_id &lt;scan sid&gt;, track by_src, ip 10.20.0.15</code>', weight: 2, why: 'Removes the authorised scanner’s noise without losing the rule.' },
+        { text: '<code>eve.json</code> shipped to the SIEM with community-id enabled', weight: 2, why: 'Structured alerts, and community-id lets you pivot between Suricata and Zeek/flow logs.' },
+        { text: 'Rule updates scheduled daily with <code>suricata-update</code> and a <code>-T</code> test', weight: 2, why: 'Fresh coverage without breaking the sensor.' },
+        { text: 'Monitor the sensor’s own drop counters (<code>stats.log</code> capture.kernel_drops)', weight: 1, why: 'A dropping sensor silently misses attacks.' },
+        { text: 'Switch the sensor to inline IPS mode with all rules set to drop', weight: -3, why: 'In a hospital, untested drop rules could block clinical systems. Start passive, promote carefully.' },
+        { text: 'Disable every rule that fired more than 100 times yesterday', weight: -2, why: 'Volume alone isn’t a reason; some high-volume rules are catching real problems.' }
+      ] }
+    ]
+  },
+  playbook: {
+    rules: [
+      ['Place for a purpose. ', 'Decide what you need to see (perimeter, lateral movement, DMZ) and put sensors on those links.'],
+      ['Prefer TAPs on critical links. ', 'Use SPAN where it’s good enough, and watch for drops when it isn’t.'],
+      ['Start passive. ', 'Run as IDS first, measure false positives, then promote proven rules to inline drop.'],
+      ['Tune surgically. ', 'Threshold or suppress by host/network; never blanket-disable to silence noise.'],
+      ['Ship structured output. ', 'eve.json to the SIEM, with community-id and asset context.'],
+      ['Monitor the monitor. ', 'Track packet drops, rule-load failures and sensor health like any production service.']
+    ],
+    quote: ['Visibility is a placement decision before it is a rules decision.']
+  }
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dashboard — IDS Training</title>
+<meta name="description" content="IDS Training dashboard: progress, access codes, labs and badges.">
+<link rel="stylesheet" href="module-kit.css">
+<script src="labs-access.js"></script>
+<script>LabsAccess.guard(null);</script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="topbar profile-bar">
+  <div class="wrap">
+    <a class="brand" href="index.html"><span class="brand-mark" id="brand-icon"></span><span>IDS Training</span></a>
+    <span class="spacer"></span>
+    <span class="avatar" id="avatar" aria-hidden="true"></span>
+    <span class="crumb" id="who"></span>
+    <button class="btn btn-sm" type="button" id="signout">Sign out</button>
+  </div>
+</header>
+
+<main id="main" class="wrap" tabindex="-1">
+  <section class="hero">
+    <p class="chip chip-accent" style="margin:0 0 10px">Intrusion Detection Systems · Student labs</p>
+    <h1 id="hello">Welcome back</h1>
+    <p class="lead muted">Twenty hands-on labs across four tiers — from building a safe virtual lab and auditing users, to network IDS rules, host IDS and machine-learning detection.</p>
+    <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-top:18px">
+      <strong id="progress-label">0/20 labs complete</strong>
+      <span class="muted small" id="badge-label"></span>
+    </div>
+    <div class="progress-track" role="progressbar" aria-labelledby="progress-label" aria-valuemin="0" aria-valuemax="20" aria-valuenow="0" id="progress-bar"><span></span></div>
+  </section>
+
+  <section class="resume" id="resume" aria-label="Resume"></section>
+
+  <div class="dash-grid">
+    <section class="card" aria-labelledby="code-h">
+      <h2 id="code-h" style="font-size:1.15rem;display:flex;gap:8px;align-items:center"><span id="key-icon"></span>Enter an access code</h2>
+      <p class="small muted">Pass a lab’s quiz to recover the next lab’s code. Instructors can use the master code to unlock everything. Case, spaces and dashes are ignored.</p>
+      <form id="code-form" class="stack">
+        <div class="field">
+          <label for="code-input">Access code</label>
+          <input type="text" id="code-input" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="e.g. WORD-WORD-00">
+        </div>
+        <button class="btn btn-primary" type="submit">Unlock</button>
+        <p id="code-msg" role="status" aria-live="polite" class="small" style="margin:0"></p>
+      </form>
+    </section>
+    <section class="card" aria-labelledby="vault-h">
+      <h2 id="vault-h" style="font-size:1.15rem">Intel Vault</h2>
+      <p class="small muted">Codes you have recovered. Share nothing — your classmates should earn theirs.</p>
+      <ul class="vault-list" id="vault"></ul>
+    </section>
+  </div>
+
+  <div id="tiers"></div>
+
+  <section class="tier" aria-labelledby="badges-h">
+    <div class="tier-head"><h2 id="badges-h">Badge case</h2><span class="muted small" id="badge-count"></span></div>
+    <div class="badge-case" id="badge-case"></div>
+  </section>
+
+  <section class="tier card" aria-labelledby="reset-h">
+    <h2 id="reset-h" style="font-size:1.1rem">Reset progress</h2>
+    <p class="small muted">Clears your badges, scores, unlocked labs, recovered codes and cooldowns for this profile. Your name stays.</p>
+    <button class="btn btn-danger" type="button" id="reset-btn">Reset progress…</button>
+  </section>
+</main>
+
+<footer class="site-footer"><div class="wrap">IDS Training · Everything is stored locally in this browser. Access codes are a classroom pacing mechanic, not real security.</div></footer>
+
+<dialog id="unlock-dialog" aria-labelledby="unlock-title">
+  <form method="dialog" class="dialog-body stack" id="unlock-form">
+    <h2 id="unlock-title" style="font-size:1.2rem;margin:0">Unlock lab</h2>
+    <p id="unlock-desc" class="small muted" style="margin:0"></p>
+    <div class="field">
+      <label for="unlock-input">Access code</label>
+      <input type="text" id="unlock-input" autocomplete="off" autocapitalize="characters" spellcheck="false">
+    </div>
+    <p id="unlock-msg" role="status" aria-live="polite" class="small" style="margin:0"></p>
+    <div class="btn-row">
+      <button class="btn btn-primary" type="submit" value="unlock" id="unlock-submit">Unlock &amp; open</button>
+      <button class="btn" type="button" id="unlock-cancel">Cancel</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="reset-dialog" aria-labelledby="reset-title">
+  <div class="dialog-body stack">
+    <h2 id="reset-title" style="font-size:1.2rem;margin:0">Reset all progress?</h2>
+    <p class="small" style="margin:0">This cannot be undone. Badges, scores, unlocked labs and the Intel Vault will be cleared.</p>
+    <div class="btn-row">
+      <button class="btn btn-danger" type="button" id="reset-confirm">Yes, reset</button>
+      <button class="btn" type="button" id="reset-cancel">Keep my progress</button>
+    </div>
+  </div>
+</dialog>
+
+<script src="dashboard.js"></script>
+</body>
+</html>

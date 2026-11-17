@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lab 01 — IDS Training</title>
+<link rel="stylesheet" href="module-kit.css">
+<script src="labs-access.js"></script>
+<script>LabsAccess.guard('lab01');</script>
+</head>
+<body>
+<div id="app"><noscript><p style="padding:16px">IDS Training needs JavaScript enabled.</p></noscript></div>
+<script src="module-kit.js"></script>
+<script src="questions.js"></script>
+<script src="assessment.js"></script>
+<script>
+ModuleKit.mount({
+  id: 'lab01',
+  briefing: {
+    hook: 'Before you can detect an attack, you need somewhere safe to launch one. A lab that can reach your real network is not a lab — it is an incident waiting to happen.',
+    lead: 'Every lab in this course assumes an isolated set of virtual machines: an <strong>attacker</strong>, one or more <strong>victims</strong>, and a <strong>sensor</strong> that watches the traffic between them. In this lab you design that environment with VirtualBox (VMware Workstation and Hyper-V offer the same concepts under different names).',
+    stats: [
+      { value: 'Type 1 / 2', label: 'Two families of hypervisor', note: 'Type 1 (ESXi, Hyper-V, Proxmox) runs on bare metal. Type 2 (VirtualBox, VMware Workstation) runs as an app on your OS.' },
+      { value: '4', label: 'Network modes you will use most', note: 'NAT, Bridged, Host-only and Internal network — each gives a different level of isolation.' },
+      { value: '1', label: 'Clean snapshot before every exercise', note: 'Restoring a snapshot takes seconds; rebuilding a compromised VM takes an afternoon.' }
+    ],
+    objectives: [
+      'Explain the difference between Type 1 and Type 2 hypervisors.',
+      'Choose the right virtual network mode for attack, victim and sensor VMs.',
+      'Use snapshots to return to a known-good state.',
+      'Configure a sensor NIC so it can see other VMs’ traffic.'
+    ],
+    blocks: [{ type: 'myths', items: [
+      { myth: 'A VM is a perfect sandbox — nothing can ever escape it.', fact: 'Hypervisor “VM escape” vulnerabilities do exist. Patch the hypervisor and disable shared folders, clipboard and drag-and-drop when handling malware.' },
+      { myth: 'Bridged mode is safest because the VM gets its own IP address.', fact: 'Bridged mode places the VM directly on your physical LAN — the opposite of isolation. Use Internal or Host-only networks for attack traffic.' },
+      { myth: 'Snapshots are the same as backups.', fact: 'Snapshots are rollback points that depend on the base disk. If the disk file is lost or corrupted, the snapshots go with it. Export or back up separately.' }
+    ] }]
+  },
+  scenario: {
+    meta: ['Week 1', 'Student lab build', 'VirtualBox 7'],
+    title: 'Priya’s first lab network',
+    story: '<p>Priya is building the course lab on her laptop: <strong>Kali</strong> (attacker), <strong>Ubuntu Server</strong> (victim), <strong>Windows 10</strong> (victim) and an <strong>Ubuntu sensor</strong> that will later run Suricata and Wazuh. Her university’s acceptable-use policy forbids scanning the campus network.</p><p>To “make things easy” she has set every VM to <em>Bridged Adapter</em> so they all get campus IP addresses and internet access. Her first Nmap scan is about to run.</p>',
+    blocks: [
+      { type: 'choice', title: 'Decision 1 — Where should attack traffic flow?', prompt: 'Which network design should Priya use for the attacker, victims and sensor?', options: [
+        { text: 'Put all four VMs on a VirtualBox <strong>Internal network</strong> (e.g. <code>idslab</code>) with the sensor’s adapter set to promiscuous “Allow All”.', verdict: 'good', why: 'Internal networks only connect VMs to each other — no host, no LAN, no internet. Promiscuous mode lets the sensor see traffic between the other VMs.' },
+        { text: 'Keep everything on <strong>NAT</strong>: the VMs are hidden from campus and can still download tools.', verdict: 'partial', why: 'Plain NAT hides VMs from the LAN, but each VM sits behind its own NAT engine, so the attacker cannot reach the victims and the sensor sees nothing. NAT Network fixes reachability but still allows outbound internet traffic.' },
+        { text: 'Leave them on <strong>Bridged</strong> but ask the attacker VM to only scan the victims’ IPs.', verdict: 'bad', why: 'One typo in a target range and Priya scans the campus network, breaching policy. Bridged mode gives no isolation at all.' }
+      ] },
+      { type: 'choice', title: 'Decision 2 — The VMs need updates', prompt: 'The victims need patches and the sensor needs Suricata packages. What is the safest approach?', options: [
+        { text: 'Temporarily add a second <strong>NAT adapter</strong>, update, remove or disconnect it, then take a clean snapshot.', verdict: 'good', why: 'Internet access becomes a short, deliberate step. The snapshot captures an up-to-date clean state you can restore after every exercise.' },
+        { text: 'Download packages on the host and keep a shared folder permanently mounted in every VM.', verdict: 'partial', why: 'It works, but a permanent shared folder is a path from a compromised VM into the host’s files. Enable it only when needed.' },
+        { text: 'Switch the VMs back to Bridged permanently — updates matter more than isolation.', verdict: 'bad', why: 'You would undo all isolation to solve a temporary problem. Updates can be done safely with a temporary NAT adapter.' }
+      ] }
+    ]
+  },
+  practice: {
+    intro: 'Design the lab, then drive VirtualBox from the command line.',
+    blocks: [
+      { type: 'custom', title: 'Lab builder: wire up four VMs', tag: 'Builder', intro: 'Pick a network mode for each VM’s first adapter and set the sensor options, then check your design.', render: function (host, K) {
+        var vms = [
+          { id: 'kali', name: 'Kali (attacker)', want: 'intnet' },
+          { id: 'ubu', name: 'Ubuntu Server (victim)', want: 'intnet' },
+          { id: 'win', name: 'Windows 10 (victim)', want: 'intnet' },
+          { id: 'sensor', name: 'Ubuntu sensor (IDS)', want: 'intnet' }
+        ];
+        var modes = [['', 'Choose…'], ['nat', 'NAT'], ['natnet', 'NAT Network'], ['bridged', 'Bridged Adapter'], ['hostonly', 'Host-only Adapter'], ['intnet', 'Internal Network']];
+        var grid = K.el('div', { class: 'sim-grid two' });
+        vms.forEach(function (v) {
+          var id = K.nextId('vm');
+          var sel = K.el('select', { id: id, 'data-vm': v.id });
+          modes.forEach(function (m) { sel.appendChild(K.el('option', { value: m[0], text: m[1] })); });
+          grid.appendChild(K.el('div', { class: 'field' }, [K.el('label', { for: id, text: v.name + ' — Adapter 1' }), sel]));
+        });
+        host.appendChild(grid);
+        var extra = K.el('div', { class: 'pill-row', style: 'margin-top:14px' });
+        var toggles = [['promisc', 'Sensor promiscuous mode: Allow All'], ['snap', 'Take “clean-baseline” snapshots'], ['shared', 'Shared clipboard & folders enabled'], ['internet', 'Permanent internet on victims']];
+        toggles.forEach(function (t) {
+          var b = K.el('button', { type: 'button', class: 'toggle', 'aria-pressed': 'false', 'data-t': t[0], text: t[1] });
+          b.addEventListener('click', function () { b.setAttribute('aria-pressed', String(b.getAttribute('aria-pressed') !== 'true')); });
+          extra.appendChild(b);
+        });
+        host.appendChild(extra);
+        var fb = K.el('div', { class: 'feedback', role: 'status', 'aria-live': 'polite' });
+        var check = K.el('button', { type: 'button', class: 'btn btn-primary', style: 'margin-top:14px', text: 'Check my design' });
+        check.addEventListener('click', function () {
+          var notes = [], score = 0, max = 8;
+          var sels = K.$$('select', host);
+          var vals = sels.map(function (s) { return s.value; });
+          sels.forEach(function (s, i) {
+            var v = s.value;
+            if (v === 'intnet') { score++; }
+            else if (v === 'hostonly') { score += 0.5; notes.push(vms[i].name + ': Host-only isolates from the LAN but the host can reach the VM — acceptable, though Internal is stricter.'); }
+            else if (v === 'bridged') notes.push(vms[i].name + ': Bridged puts this VM on the physical LAN — not isolated.');
+            else if (v === 'nat') notes.push(vms[i].name + ': plain NAT gives each VM its own NAT engine, so VMs cannot reach each other.');
+            else if (v === 'natnet') notes.push(vms[i].name + ': NAT Network lets VMs talk, but also reach the internet — attack traffic could leave the lab.');
+            else notes.push(vms[i].name + ': no adapter mode chosen.');
+          });
+          if (vals.filter(function (v) { return v; }).length === 4 && vals.some(function (v) { return v !== vals[0]; })) notes.push('Your VMs are on different networks, so the sensor cannot see all the traffic.');
+          function on(k) { return host.querySelector('[data-t="' + k + '"]').getAttribute('aria-pressed') === 'true'; }
+          if (on('promisc')) score++; else notes.push('Sensor promiscuous mode is off — it will only see traffic addressed to itself.');
+          if (on('snap')) score++; else notes.push('No clean snapshots — you will have no fast way back after an exercise.');
+          if (on('shared')) { notes.push('Shared clipboard/folders give a compromised VM a path to the host. Turn them off for attack work.'); } else score++;
+          if (on('internet')) { notes.push('Permanent internet on victims lets malware or scans leave the lab. Use a temporary NAT adapter for updates.'); } else score++;
+          var pct = Math.round(score / max * 100);
+          K.setFeedback(fb, pct >= 90 ? 'good' : pct >= 60 ? 'partial' : 'bad', '<p>Design score: <strong>' + pct + '%</strong></p>' + (notes.length ? '<ul>' + notes.map(function (n) { return '<li>' + n + '</li>'; }).join('') + '</ul>' : '<p>Isolated, observable and recoverable — exactly what a security lab needs.</p>'), pct >= 90 ? 'Lab-ready' : pct >= 60 ? 'Close — fix the notes below' : 'Not safe yet');
+        });
+        host.appendChild(check); host.appendChild(fb);
+      } },
+      { type: 'terminal', title: 'VBoxManage: configure from the CLI', host: 'student@host — VBoxManage', prompt: 'host$', motd: 'VirtualBox command-line simulator. VMs: "Kali", "Ubuntu-Victim", "Sensor".', tasks: [
+        { goal: 'List all registered VMs: <code>VBoxManage list vms</code>', match: /^vboxmanage\s+list\s+vms$/i, hint: 'VBoxManage list vms', output: '"Kali" {3f1c…}\n"Ubuntu-Victim" {8a2e…}\n"Sensor" {c47d…}' },
+        { goal: 'Attach Kali’s NIC 1 to internal network <code>idslab</code>', match: /^vboxmanage\s+modifyvm\s+"?kali"?\s+--nic1\s+intnet\s+--intnet1\s+"?idslab"?$/i, hint: 'VBoxManage modifyvm "Kali" --nic1 intnet --intnet1 "idslab"', output: '(no output — NIC 1 of "Kali" is now attached to internal network "idslab")' },
+        { goal: 'Let the Sensor’s NIC 1 see all traffic: <code>--nicpromisc1 allow-all</code>', match: /^vboxmanage\s+modifyvm\s+"?sensor"?\s+--nicpromisc1\s+allow-all$/i, hint: 'VBoxManage modifyvm "Sensor" --nicpromisc1 allow-all', output: '(no output — promiscuous mode on NIC 1 set to allow-all)' },
+        { goal: 'Snapshot the victim as <code>clean-baseline</code>', match: /^vboxmanage\s+snapshot\s+"?ubuntu-victim"?\s+take\s+"?clean-baseline"?(\s+.*)?$/i, hint: 'VBoxManage snapshot "Ubuntu-Victim" take "clean-baseline"', output: '0%...10%...20%...30%...40%...50%...60%...70%...80%...90%...100%\nSnapshot taken. UUID: 5b0e…' },
+        { goal: 'Start the victim without a window: <code>--type headless</code>', match: /^vboxmanage\s+startvm\s+"?ubuntu-victim"?\s+--type\s+headless$/i, hint: 'VBoxManage startvm "Ubuntu-Victim" --type headless', output: 'Waiting for VM "Ubuntu-Victim" to power on...\nVM "Ubuntu-Victim" has been successfully started.' }
+      ], extra: [
+        { match: /^vboxmanage\s+list\s+runningvms$/i, output: '(none running yet)' },
+        { match: /bridged/i, output: 'Simulator refuses: bridged mode would put this VM on your physical LAN.', err: true }
+      ], success: 'Your lab is isolated, the sensor can see traffic, and you have a clean snapshot to roll back to.' }
+    ]
+  },
+  playbook: {
+    rules: [
+      ['Isolate by default. ', 'Attack and victim traffic lives on an Internal or Host-only network. Internet access is a temporary, deliberate exception.'],
+      ['Give every VM a role. ', 'Attacker, victim(s) and sensor. Separating roles makes traffic easier to read and evidence easier to trust.'],
+      ['Snapshot before every exercise. ', 'Name snapshots clearly (<code>clean-baseline</code>, <code>pre-lab07</code>) and restore after each attack.'],
+      ['Let the sensor see. ', 'A sensor needs promiscuous mode (“Allow All”) on the monitored segment, otherwise it only sees its own traffic.'],
+      ['Close the side doors. ', 'Disable shared clipboard, drag-and-drop and shared folders when handling malware or exploits.'],
+      ['Patch the hypervisor. ', 'The hypervisor is the wall between the lab and your host. Keep it — and its guest additions — up to date.']
+    ],
+    quote: ['If your lab can reach the real network, it isn’t a lab. It’s an incident with a schedule.']
+  }
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lab 15 — IDS Training</title>
+<link rel="stylesheet" href="module-kit.css">
+<script src="labs-access.js"></script>
+<script>LabsAccess.guard('lab15');</script>
+</head>
+<body>
+<div id="app"><noscript><p style="padding:16px">IDS Training needs JavaScript enabled.</p></noscript></div>
+<script src="module-kit.js"></script>
+<script src="questions.js"></script>
+<script src="assessment.js"></script>
+<script>
+ModuleKit.mount({
+  id: 'lab15',
+  briefing: {
+    hook: 'Alerts tell you something looked wrong. Packets tell you exactly what was said. When an IDS alert needs proof, you open the capture.',
+    lead: '<strong>Wireshark</strong> (and its command-line sibling <code>tshark</code>, plus <code>tcpdump</code>) captures and decodes network traffic. Two filter languages matter: <strong>capture filters</strong> (BPF syntax, decide what is recorded) and <strong>display filters</strong> (Wireshark syntax, decide what you see). Mixing them up is the most common beginner mistake.',
+    stats: [
+      { value: 'host 10.0.0.5', label: 'Capture filter (BPF)', note: 'Applied while capturing — packets that don’t match are never saved.' },
+      { value: 'ip.addr==10.0.0.5', label: 'Display filter', note: 'Applied to an existing capture — you can change it freely without losing data.' },
+      { value: 'SYN, no ACK', label: 'The scan signature', note: '<code>tcp.flags.syn==1 &amp;&amp; tcp.flags.ack==0</code> shows connection attempts; many to different ports = scan.' }
+    ],
+    objectives: [
+      'Distinguish capture filters from display filters.',
+      'Use display filters to isolate scans, cleartext credentials, DNS anomalies and ARP spoofing.',
+      'Read packet details and follow a conversation.',
+      'Capture safely and legally on networks you are authorised to monitor.'
+    ],
+    blocks: [{ type: 'myths', items: [
+      { myth: 'Capture everything, always — filter later.', fact: 'Full captures fill disks fast and may collect personal data you have no right to keep. Capture what your investigation needs.' },
+      { myth: 'HTTPS traffic is invisible in Wireshark.', fact: 'Payloads are encrypted, but IPs, ports, timing, TLS handshake details and the server name (SNI) are still visible and useful.' },
+      { myth: 'Display filter syntax works as a capture filter.', fact: 'They are different languages: <code>tcp port 80</code> (BPF capture) vs <code>tcp.port == 80</code> (display).' }
+    ] }]
+  },
+  scenario: {
+    meta: ['Lab capture', '21 packets', 'Post-alert analysis'],
+    title: 'Prove the alert',
+    story: '<p>Suricata raised three alerts on the lab network overnight: a possible port scan from <code>10.10.10.5</code>, a suspicious DNS query from <code>10.10.10.30</code>, and an ARP anomaly. The full-packet capture from the sensor has been trimmed to the relevant 21 packets. Your job is to confirm or refute each alert from the packets themselves.</p>',
+    blocks: [
+      { type: 'choice', title: 'Decision — Capturing on the sensor', prompt: 'You need a new capture of only the suspicious host’s traffic for 24 hours. What do you run?', options: [
+        { text: '<code>tcpdump -i enp0s8 -w host5.pcap host 10.10.10.5</code> (BPF capture filter), rotating files with <code>-C</code>/<code>-G</code>.', verdict: 'good', why: 'Filtering at capture time keeps the file small and focused; rotation prevents a single huge file.' },
+        { text: '<code>tcpdump -i enp0s8 -w all.pcap</code> and filter in Wireshark later.', verdict: 'partial', why: 'Works for short periods, but a 24-hour full capture can be enormous and collects far more than you need.' },
+        { text: '<code>tcpdump -i enp0s8 ip.addr==10.10.10.5</code>', verdict: 'bad', why: 'That is Wireshark display-filter syntax; tcpdump expects BPF and will reject it.' }
+      ] }
+    ]
+  },
+  practice: {
+    intro: 'Use display filters on the capture to answer the questions. Click a packet to see its details.',
+    blocks: [
+      { type: 'custom', title: 'Packet analyser', tag: 'Simulator', intro: 'Supported: protocol names (<code>tcp udp icmp dns http arp</code>), <code>ip.src</code> <code>ip.dst</code> <code>ip.addr</code> <code>tcp.port</code> <code>udp.port</code> <code>tcp.flags.syn</code> <code>tcp.flags.ack</code> <code>icmp.type</code> <code>arp.opcode</code> <code>http.request.method</code> <code>dns.qry.name</code>, operators <code>== != contains</code>, and <code>&amp;&amp; || !</code>.', render: function (host, K) {
+        var A = '10.10.10.5', V = '10.10.10.20', W = '192.0.2.10', G = '10.10.10.1', H = '10.10.10.30';
+        function tcp(no, t, s, sp, d, dp, syn, ack, info, extra) { var p = { no: no, time: t, src: s, dst: d, proto: 'TCP', info: info, f: { tcp: 1, 'ip.src': s, 'ip.dst': d, 'ip.addr': [s, d], 'tcp.port': [sp, dp], 'tcp.srcport': sp, 'tcp.dstport': dp, 'tcp.flags.syn': syn, 'tcp.flags.ack': ack } }; if (extra) Object.keys(extra).forEach(function (k) { p.f[k] = extra[k]; }); return p; }
+        var pk = [
+          { no: 1, time: '0.000', src: '08:00:27:12:34:56', dst: 'Broadcast', proto: 'ARP', info: 'Who has 10.10.10.1? Tell 10.10.10.20', f: { arp: 1, 'arp.opcode': 1 } },
+          { no: 2, time: '0.001', src: '08:00:27:aa:bb:cc', dst: '08:00:27:12:34:56', proto: 'ARP', info: '10.10.10.1 is at 08:00:27:aa:bb:cc', f: { arp: 1, 'arp.opcode': 2 } },
+          { no: 3, time: '0.010', src: V, dst: G, proto: 'DNS', info: 'Standard query A intranet.lab.example', f: { udp: 1, dns: 1, 'ip.src': V, 'ip.dst': G, 'ip.addr': [V, G], 'udp.port': [53211, 53], 'dns.qry.name': 'intranet.lab.example' } },
+          { no: 4, time: '0.012', src: G, dst: V, proto: 'DNS', info: 'Standard query response A 192.0.2.10', f: { udp: 1, dns: 1, 'ip.src': G, 'ip.dst': V, 'ip.addr': [V, G], 'udp.port': [53, 53211], 'dns.qry.name': 'intranet.lab.example' } },
+          tcp(5, '0.020', V, 50000, W, 80, 1, 0, '50000 → 80 [SYN]'),
+          tcp(6, '0.021', W, 80, V, 50000, 1, 1, '80 → 50000 [SYN, ACK]'),
+          tcp(7, '0.021', V, 50000, W, 80, 0, 1, '50000 → 80 [ACK]'),
+          tcp(8, '0.030', V, 50000, W, 80, 0, 1, 'GET /login HTTP/1.1', { http: 1, 'http.request.method': 'GET' }),
+          tcp(9, '4.210', V, 50000, W, 80, 0, 1, 'POST /login HTTP/1.1 (application/x-www-form-urlencoded)  user=alice&pass=Summer2026!', { http: 1, 'http.request.method': 'POST' }),
+          tcp(10, '4.230', W, 80, V, 50000, 0, 1, 'HTTP/1.1 302 Found', { http: 1 }),
+          tcp(11, '9.001', A, 61022, V, 21, 1, 0, '61022 → 21 [SYN]'),
+          tcp(12, '9.001', A, 61022, V, 22, 1, 0, '61022 → 22 [SYN]'),
+          tcp(13, '9.002', A, 61022, V, 23, 1, 0, '61022 → 23 [SYN]'),
+          tcp(14, '9.002', A, 61022, V, 80, 1, 0, '61022 → 80 [SYN]'),
+          tcp(15, '9.002', A, 61022, V, 443, 1, 0, '61022 → 443 [SYN]'),
+          tcp(16, '9.003', A, 61022, V, 3389, 1, 0, '61022 → 3389 [SYN]'),
+          tcp(17, '9.003', V, 23, A, 61022, 0, 1, '23 → 61022 [RST, ACK]'),
+          tcp(18, '9.003', V, 22, A, 61022, 1, 1, '22 → 61022 [SYN, ACK]'),
+          { no: 19, time: '9.500', src: A, dst: V, proto: 'ICMP', info: 'Echo (ping) request id=0x1a2b', f: { icmp: 1, 'icmp.type': 8, 'ip.src': A, 'ip.dst': V, 'ip.addr': [A, V] } },
+          { no: 20, time: '12.400', src: H, dst: G, proto: 'DNS', info: 'Standard query TXT aGVsbG8gd29ybGQgc2VjcmV0cw.q7.exfil-example.net', f: { udp: 1, dns: 1, 'ip.src': H, 'ip.dst': G, 'ip.addr': [H, G], 'udp.port': [41000, 53], 'dns.qry.name': 'aGVsbG8gd29ybGQgc2VjcmV0cw.q7.exfil-example.net' } },
+          { no: 21, time: '15.000', src: '08:00:27:de:ad:05', dst: '08:00:27:12:34:56', proto: 'ARP', info: '10.10.10.1 is at 08:00:27:de:ad:05 (duplicate use of 10.10.10.1 detected!)', f: { arp: 1, 'arp.opcode': 2 } }
+        ];
+        function val(s) { s = s.trim(); if (/^".*"$/.test(s)) return s.slice(1, -1); if (/^\d+$/.test(s)) return +s; return s; }
+        function term(t, p) {
+          t = t.trim(); var neg = false;
+          while (t.charAt(0) === '!') { neg = !neg; t = t.slice(1).trim(); }
+          if (t.charAt(0) === '(' && t.slice(-1) === ')') { var r0 = expr(t.slice(1, -1), p); return neg ? !r0 : r0; }
+          var m = /^([a-z.]+)\s*(==|!=|contains)\s*(.+)$/i.exec(t), r;
+          if (m) {
+            var fv = p.f[m[1].toLowerCase()], want = val(m[3]);
+            if (fv === undefined) r = m[2] === '!=';
+            else {
+              var arr = Array.isArray(fv) ? fv : [fv];
+              if (m[2] === '==') r = arr.some(function (x) { return String(x).toLowerCase() === String(want).toLowerCase(); });
+              else if (m[2] === '!=') r = !arr.some(function (x) { return String(x).toLowerCase() === String(want).toLowerCase(); });
+              else r = arr.some(function (x) { return String(x).toLowerCase().indexOf(String(want).toLowerCase()) !== -1; });
+            }
+          } else if (/^[a-z]+$/i.test(t)) r = !!p.f[t.toLowerCase()];
+          else throw new Error('bad');
+          return neg ? !r : r;
+        }
+        function expr(s, p) { return s.split('||').some(function (o) { return o.split('&&').every(function (a) { return term(a, p); }); }); }
+        var input = K.el('input', { type: 'text', id: 'pf', placeholder: 'e.g. tcp.flags.syn==1 && tcp.flags.ack==0', autocomplete: 'off', spellcheck: 'false', autocapitalize: 'off', style: 'font-family:var(--mono)' });
+        var status = K.el('p', { class: 'small', 'aria-live': 'polite' });
+        var list = K.el('div', { class: 'table-wrap', style: 'margin-top:10px;max-height:340px;overflow:auto' });
+        var detail = K.el('div', { class: 'callout', style: 'margin-top:10px', html: '<span class="muted">Select a packet to see its details.</span>' });
+        function apply() {
+          var q = input.value.trim(), shown;
+          try { shown = q ? pk.filter(function (p) { return expr(q, p); }) : pk; input.style.borderColor = q ? '#4ade80' : ''; status.textContent = 'Displayed: ' + shown.length + ' of ' + pk.length + ' packets'; }
+          catch (e) { input.style.borderColor = '#f87171'; status.textContent = 'Invalid filter (shown in red in Wireshark too). Check the syntax.'; return; }
+          var t = K.el('table');
+          t.appendChild(K.el('thead', { html: '<tr><th>No.</th><th>Time</th><th>Source</th><th>Destination</th><th>Proto</th><th>Info</th></tr>' }));
+          var tb = K.el('tbody');
+          shown.forEach(function (p) {
+            var btn = K.el('button', { type: 'button', class: 'btn btn-sm', style: 'min-width:44px', text: String(p.no), 'aria-label': 'Packet ' + p.no + ' details' });
+            btn.addEventListener('click', function () {
+              detail.innerHTML = '';
+              detail.appendChild(K.el('strong', { text: 'Frame ' + p.no + ' · ' + p.proto }));
+              var dl = K.el('dl', { class: 'kv', style: 'margin-top:8px' });
+              [['Source', p.src], ['Destination', p.dst], ['Info', p.info]].concat(Object.keys(p.f).filter(function (k) { return k.indexOf('.') !== -1; }).map(function (k) { return [k, Array.isArray(p.f[k]) ? p.f[k].join(', ') : p.f[k]]; })).forEach(function (r) { dl.appendChild(K.el('dt', { text: r[0] })); dl.appendChild(K.el('dd', { class: 'log-line', text: String(r[1]) })); });
+              detail.appendChild(dl);
+            });
+            var tr = K.el('tr');
+            tr.appendChild(K.el('td', {}, [btn]));
+            [p.time, p.src, p.dst, p.proto, p.info].forEach(function (c) { tr.appendChild(K.el('td', { class: 'log-line', text: c })); });
+            tb.appendChild(tr);
+          });
+          t.appendChild(tb); list.innerHTML = ''; list.appendChild(t);
+        }
+        input.addEventListener('input', apply);
+        host.appendChild(K.el('div', { class: 'field' }, [K.el('label', { for: 'pf', text: 'Display filter' }), input]));
+        var quick = K.el('div', { class: 'pill-row', style: 'margin-top:8px' });
+        ['tcp.flags.syn==1 && tcp.flags.ack==0', 'http.request.method=="POST"', 'dns.qry.name contains "exfil"', 'arp.opcode==2', 'icmp.type==8'].forEach(function (f) {
+          var b = K.el('button', { type: 'button', class: 'toggle', text: f }); b.style.fontFamily = 'var(--mono)'; b.style.fontSize = '.8rem';
+          b.addEventListener('click', function () { input.value = f; apply(); });
+          quick.appendChild(b);
+        });
+        host.appendChild(quick); host.appendChild(status); host.appendChild(list); host.appendChild(detail);
+        var qs = [
+          ['How many SYN-only packets did 10.10.10.5 send (the scan)?', '6', 'Packets 11–16: SYN to 21, 22, 23, 80, 443 and 3389. Packet 18 (SYN/ACK) shows port 22 is open.'],
+          ['Which packet number exposes a password in cleartext?', '9', 'An HTTP POST to /login over port 80 — credentials are readable by anyone on the path. The site should use HTTPS.'],
+          ['Which packet number is the likely DNS exfiltration/tunnelling query?', '20', 'A TXT query with a long base64-looking label to an unusual domain is a classic DNS tunnelling pattern.'],
+          ['Which packet number shows ARP spoofing of the gateway?', '21', 'A second, different MAC claims 10.10.10.1 — a man-in-the-middle setup.']
+        ];
+        host.appendChild(K.el('h4', { style: 'margin-top:16px', text: 'Questions' }));
+        qs.forEach(function (q, i) {
+          var id = 'wq' + i, inp = K.el('input', { type: 'number', id: id, min: '0', style: 'max-width:110px' }), fb = K.el('div', { class: 'feedback', 'aria-live': 'polite' });
+          var b = K.el('button', { type: 'button', class: 'btn btn-sm', text: 'Check' });
+          b.addEventListener('click', function () { var ok = inp.value.trim() === q[1]; K.setFeedback(fb, ok ? 'good' : 'bad', ok ? q[2] : 'Not quite — try one of the quick filters and inspect the packets.', ok ? 'Correct' : 'Try again'); });
+          host.appendChild(K.el('div', { class: 'field', style: 'margin-top:8px' }, [K.el('label', { for: id, text: (i + 1) + '. ' + q[0] }), K.el('div', { class: 'btn-row' }, [inp, b]), fb]));
+        });
+        apply();
+      } },
+      { type: 'sort', title: 'Capture filter or display filter?', left: 'Capture filter (BPF)', right: 'Display filter', items: [
+        { text: '<code>tcp port 443</code>', answer: 'left', why: 'BPF syntax: words, no dots or ==.' },
+        { text: '<code>tcp.port == 443</code>', answer: 'right', why: 'Wireshark display-filter field syntax.' },
+        { text: '<code>host 10.10.10.5 and not port 22</code>', answer: 'left', why: 'BPF primitives combined with and/not.' },
+        { text: '<code>http.request.method == "POST"</code>', answer: 'right', why: 'Protocol-dissector fields only exist in display filters.' },
+        { text: '<code>icmp</code> used in <code>tcpdump -i eth0 icmp</code>', answer: 'left', why: 'Given to tcpdump at capture time — BPF.' },
+        { text: '<code>dns.qry.name contains "exfil"</code>', answer: 'right', why: 'The contains operator and dissector fields are display-filter features.' }
+      ] }
+    ]
+  },
+  playbook: {
+    rules: [
+      ['Capture with purpose. ', 'Use BPF capture filters, ring buffers and time limits — and only on networks you are authorised to monitor.'],
+      ['Explore with display filters. ', 'Start broad, then narrow: protocol → host → flags → content.'],
+      ['Know the tell-tale filters. ', 'SYN-only for scans, POST over HTTP for cleartext creds, long DNS labels for tunnelling, duplicate ARP replies for spoofing.'],
+      ['Follow the stream. ', 'Follow TCP/HTTP stream to read a whole conversation in order.'],
+      ['Use Statistics. ', 'Conversations, Endpoints and Protocol Hierarchy reveal the big picture before you read packets.'],
+      ['Protect captures. ', 'Pcaps can contain passwords and personal data — store, share and delete them carefully.']
+    ],
+    quote: ['Logs are someone’s summary. Packets are the transcript.']
+  }
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lab 14 — IDS Training</title>
+<link rel="stylesheet" href="module-kit.css">
+<script src="labs-access.js"></script>
+<script>LabsAccess.guard('lab14');</script>
+</head>
+<body>
+<div id="app"><noscript><p style="padding:16px">IDS Training needs JavaScript enabled.</p></noscript></div>
+<script src="module-kit.js"></script>
+<script src="questions.js"></script>
+<script src="assessment.js"></script>
+<script>
+ModuleKit.mount({
+  id: 'lab14',
+  briefing: {
+    hook: 'Downloaded rulesets catch yesterday’s attacks. When you need to detect <em>your</em> threat — a scan pattern, an internal tool, a flood — you write the rule yourself.',
+    lead: 'A Snort rule has a <strong>header</strong> — <code>action protocol src_ip src_port direction dst_ip dst_port</code> — and <strong>options</strong> in parentheses separated by semicolons: <code>msg</code>, detection keywords such as <code>flags</code>, <code>itype</code>, <code>content</code>, rate keywords such as <code>detection_filter</code>, and the identifiers <code>sid</code> and <code>rev</code>. Suricata uses the same structure.',
+    stats: [
+      { value: '≥ 1,000,000', label: 'Local SID range', note: 'Use SIDs of 1,000,000 and above for your own rules so they never collide with official rules.' },
+      { value: 'flags:S', label: 'Only the SYN flag set', note: 'Matches connection attempts — the building block of SYN-scan detection.' },
+      { value: 'itype:8', label: 'ICMP echo request', note: 'Type 8 is a ping request; type 0 is the echo reply.' }
+    ],
+    objectives: [
+      'Read and write the header and options of a Snort/Suricata rule.',
+      'Detect a SYN port scan with <code>flags</code> and <code>detection_filter</code>.',
+      'Detect a ping flood with <code>itype</code> and a rate threshold.',
+      'Test rules against traffic and avoid false positives.'
+    ],
+    blocks: [{ type: 'myths', items: [
+      { myth: 'A rule that matches the attack is a good rule.', fact: 'A good rule matches the attack <em>and not</em> normal traffic. Always test against benign traffic too.' },
+      { myth: '<code>alert tcp any any -> any any (flags:S;)</code> detects port scans.', fact: 'It alerts on every single new TCP connection on the network. Scans are about <em>rate</em> and <em>spread</em> — add a detection_filter.' },
+      { myth: 'You can reuse any SID number you like.', fact: 'SIDs must be unique. Duplicates cause load errors or silently replace rules. Local rules use 1,000,000+; bump <code>rev</code> when you edit.' }
+    ] }]
+  },
+  scenario: {
+    meta: ['Lab network', 'Snort 3 sensor', 'Instructor red team'],
+    title: 'The scan nobody alerted on',
+    story: '<p>During last week’s exercise the red team ran a slow SYN scan and a ping flood against the lab servers. The community ruleset caught neither in a useful way: the scan generated no alert and the flood generated <em>thousands</em> of identical ICMP alerts from an over-broad rule. Your task is to write two local rules that fire once per attack, not once per packet and not never.</p>',
+    blocks: [
+      { type: 'choice', title: 'Decision — The ICMP rule', prompt: 'Which rule best detects a ping flood against your servers?', options: [
+        { text: '<code>alert icmp any any -> $HOME_NET any (msg:"ICMP ping flood"; itype:8; detection_filter:track by_dst, count 100, seconds 1; sid:1000002; rev:1;)</code>', verdict: 'good', why: 'Only echo requests, only towards your network, and only when a destination receives more than 100 per second.' },
+        { text: '<code>alert icmp any any -> $HOME_NET any (msg:"ICMP"; sid:1000002; rev:1;)</code>', verdict: 'bad', why: 'Alerts on every ICMP packet, including normal pings, unreachable messages and replies — the flood of alerts you already have.' },
+        { text: '<code>alert icmp any any -> $HOME_NET any (msg:"Ping"; itype:8; sid:1000002; rev:1;)</code>', verdict: 'partial', why: 'Better — echo requests only — but still one alert per ping. Without a rate condition you can’t tell a flood from monitoring checks.' }
+      ] }
+    ]
+  },
+  practice: {
+    intro: 'Build both rules in the rule builder, test them against recorded traffic, then run them through Snort.',
+    blocks: [
+      { type: 'custom', title: 'Rule builder & tester', tag: 'Builder', render: function (host, K) {
+        var traffic = [
+          { name: 'SYN scan from 10.10.10.5 → 1,000 ports on .20', proto: 'tcp', flags: 'S', dport: 'many', rate: 300, total: 1000, attack: 'scan' },
+          { name: 'Normal browsing: new HTTPS connections to port 443', proto: 'tcp', flags: 'S', dport: '443', rate: 2, total: 20, attack: null },
+          { name: 'Large file download (established, ACK packets) on 443', proto: 'tcp', flags: 'A', dport: '443', rate: 800, total: 8000, attack: null },
+          { name: 'Ping flood: 1,000 echo requests/s → .20', proto: 'icmp', itype: 8, rate: 1000, total: 5000, attack: 'flood' },
+          { name: 'Monitoring ping: 1 echo request/s', proto: 'icmp', itype: 8, rate: 1, total: 60, attack: null },
+          { name: 'Echo replies from .20 during the flood', proto: 'icmp', itype: 0, rate: 1000, total: 5000, attack: null, toHome: false }
+        ];
+        function sel(id, opts, label) { var s = K.el('select', { id: id }); opts.forEach(function (o) { s.appendChild(K.el('option', { value: o[0], text: o[1] })); }); return K.el('div', { class: 'field' }, [K.el('label', { for: id, text: label }), s]); }
+        var mission = 'scan';
+        var mrow = K.el('div', { class: 'pill-row', role: 'group', 'aria-label': 'Mission' });
+        [['scan', 'Mission 1: SYN port scan'], ['flood', 'Mission 2: Ping flood']].forEach(function (m) {
+          var b = K.el('button', { type: 'button', class: 'toggle', 'aria-pressed': String(m[0] === mission), text: m[1] });
+          b.addEventListener('click', function () { mission = m[0]; K.$$('button', mrow).forEach(function (x) { x.setAttribute('aria-pressed', 'false'); }); b.setAttribute('aria-pressed', 'true'); update(); });
+          mrow.appendChild(b);
+        });
+        host.appendChild(mrow);
+        var grid = K.el('div', { class: 'sim-grid two', style: 'margin-top:12px' });
+        grid.appendChild(sel('r-proto', [['tcp', 'tcp'], ['icmp', 'icmp'], ['ip', 'ip']], 'Protocol'));
+        grid.appendChild(sel('r-dst', [['$HOME_NET', '$HOME_NET'], ['any', 'any']], 'Destination network'));
+        grid.appendChild(sel('r-dport', [['any', 'any'], ['443', '443'], ['22', '22']], 'Destination port'));
+        grid.appendChild(sel('r-flags', [['', '(no flags option)'], ['S', 'flags:S (SYN only)'], ['A', 'flags:A (ACK only)'], ['SA', 'flags:SA (SYN+ACK)']], 'TCP flags'));
+        grid.appendChild(sel('r-itype', [['', '(no itype option)'], ['8', 'itype:8 (echo request)'], ['0', 'itype:0 (echo reply)']], 'ICMP type'));
+        grid.appendChild(sel('r-track', [['', '(no detection_filter)'], ['by_src', 'track by_src'], ['by_dst', 'track by_dst']], 'detection_filter tracking'));
+        var count = K.el('input', { type: 'number', id: 'r-count', min: '1', value: '20' });
+        var secs = K.el('input', { type: 'number', id: 'r-secs', min: '1', value: '5' });
+        var msg = K.el('input', { type: 'text', id: 'r-msg', value: 'Possible SYN port scan', maxlength: '80' });
+        var sid = K.el('input', { type: 'number', id: 'r-sid', value: '1000001' });
+        grid.appendChild(K.el('div', { class: 'field' }, [K.el('label', { for: 'r-count', text: 'count (packets)' }), count]));
+        grid.appendChild(K.el('div', { class: 'field' }, [K.el('label', { for: 'r-secs', text: 'seconds' }), secs]));
+        grid.appendChild(K.el('div', { class: 'field' }, [K.el('label', { for: 'r-msg', text: 'msg' }), msg]));
+        grid.appendChild(K.el('div', { class: 'field' }, [K.el('label', { for: 'r-sid', text: 'sid' }), sid]));
+        host.appendChild(grid);
+        var pre = K.el('pre', { style: 'margin-top:12px;white-space:pre-wrap;overflow-wrap:anywhere', 'aria-live': 'polite' }, [K.el('code', { id: 'rule-preview' })]);
+        host.appendChild(K.el('p', { class: 'small muted', style: 'margin:12px 0 0', text: 'Live rule preview:' }));
+        host.appendChild(pre);
+        var testBtn = K.el('button', { type: 'button', class: 'btn btn-primary', text: 'Test against recorded traffic' });
+        var table = K.el('div', { class: 'table-wrap', style: 'margin-top:12px' });
+        var fb = K.el('div', { class: 'feedback', 'aria-live': 'polite' });
+        host.appendChild(testBtn); host.appendChild(table); host.appendChild(fb);
+        function v(id) { return host.querySelector('#' + id).value; }
+        function rule() {
+          var opts = ['msg:"' + v('r-msg').replace(/[";\\]/g, '') + '"'];
+          if (v('r-flags') && v('r-proto') === 'tcp') opts.push('flags:' + v('r-flags'));
+          if (v('r-itype') && v('r-proto') === 'icmp') opts.push('itype:' + v('r-itype'));
+          if (v('r-track')) opts.push('detection_filter:track ' + v('r-track') + ', count ' + (+v('r-count') || 1) + ', seconds ' + (+v('r-secs') || 1));
+          opts.push('sid:' + (v('r-sid') || '0')); opts.push('rev:1');
+          var port = v('r-proto') === 'icmp' ? 'any' : v('r-dport');
+          return 'alert ' + v('r-proto') + ' any any -> ' + v('r-dst') + ' ' + port + ' (' + opts.join('; ') + ';)';
+        }
+        function update() { host.querySelector('#rule-preview').textContent = rule(); }
+        K.$$('select,input', grid).forEach(function (x) { x.addEventListener('input', update); x.addEventListener('change', update); });
+        testBtn.addEventListener('click', function () {
+          var P = v('r-proto'), F = v('r-flags'), T = v('r-itype'), DP = v('r-dport'), tr = v('r-track'), C = +v('r-count') || 1, S = +v('r-secs') || 1;
+          var rows = '', ok = true, notes = [];
+          traffic.forEach(function (t) {
+            var m = (P === 'ip' || P === t.proto);
+            if (m && P === 'tcp' && F) m = F === t.flags;
+            if (m && P === 'icmp' && T !== '') m = +T === t.itype;
+            if (m && P === 'tcp' && DP !== 'any') m = t.dport === DP;
+            if (m && v('r-dst') === '$HOME_NET' && t.toHome === false) m = false;
+            var alerts = 0;
+            if (m) { if (tr) { var inWin = Math.min(t.total, t.rate * S); alerts = inWin > C ? Math.max(1, Math.round(t.total / Math.max(1, t.rate * S))) : 0; } else alerts = t.total; }
+            var wanted = t.attack === mission;
+            var good = wanted ? alerts > 0 && alerts <= 50 : alerts === 0;
+            ok = ok && good;
+            rows += '<tr><td>' + t.name + '</td><td>' + (alerts ? '<b>' + alerts.toLocaleString() + '</b>' : '0') + '</td><td class="' + (good ? 'status-good' : 'status-bad') + '">' + (wanted ? (alerts === 0 ? 'missed' : alerts > 50 ? 'alert storm' : 'detected') : (alerts ? 'false positive' : 'quiet ✓')) + '</td></tr>';
+          });
+          table.innerHTML = '<table><thead><tr><th>Recorded traffic</th><th>Alerts</th><th>Verdict</th></tr></thead><tbody>' + rows + '</tbody></table>';
+          if (+v('r-sid') < 1000000) notes.push('SID ' + v('r-sid') + ' is below 1,000,000 — reserved for official rules. Use 1000001+.');
+          if (!v('r-msg').trim()) notes.push('Add a meaningful msg so analysts know what fired.');
+          if (!tr) notes.push('No detection_filter: you get one alert per packet. Add a rate condition.');
+          if (ok && !notes.length) K.setFeedback(fb, 'good', 'Your rule detects the ' + (mission === 'scan' ? 'scan' : 'flood') + ' with a handful of alerts and stays quiet on normal traffic. ' + (mission === 'scan' ? 'Now try Mission 2.' : 'Both missions done!'), 'Mission complete');
+          else K.setFeedback(fb, ok ? 'partial' : 'bad', (notes.length ? '<ul>' + notes.map(function (n) { return '<li>' + n + '</li>'; }).join('') + '</ul>' : '') + (ok ? '' : '<p>Check the verdict column: tighten the protocol/flags/type to avoid false positives, and adjust count/seconds so the attack crosses the threshold but normal traffic doesn’t.</p>'), ok ? 'Almost' : 'Not yet');
+        });
+        update();
+      } },
+      { type: 'terminal', title: 'Validate and replay with Snort 3', host: 'student@sensor', prompt: '$', tasks: [
+        { goal: 'Append your scan rule to <code>local.rules</code> (use the hint)', match: /^echo\s+'alert tcp .*flags:S.*detection_filter:.*sid:1\d{6}.*'\s*>>\s*\/usr\/local\/etc\/rules\/local\.rules$/i, hint: "echo 'alert tcp any any -> $HOME_NET any (msg:\"Possible SYN port scan\"; flags:S; detection_filter:track by_src, count 20, seconds 5; sid:1000001; rev:1;)' >> /usr/local/etc/rules/local.rules", output: '(rule appended)' },
+        { goal: 'Validate config + rules: <code>snort -c /usr/local/etc/snort/snort.lua -R /usr/local/etc/rules/local.rules -T</code>', match: /^(sudo\s+)?snort\s+-c\s+\/usr\/local\/etc\/snort\/snort\.lua\s+-R\s+\/usr\/local\/etc\/rules\/local\.rules\s+-T$/i, hint: 'snort -c /usr/local/etc/snort/snort.lua -R /usr/local/etc/rules/local.rules -T', output: '--------------------------------------------------\nrule counts\n       total rules loaded: 1\n               text rules: 1\n--------------------------------------------------\nSnort successfully validated the configuration (with 0 warnings).' },
+        { goal: 'Replay the scan capture and print fast alerts: <code>-r scan.pcap -A alert_fast -k none</code>', match: /^(sudo\s+)?snort\s+-c\s+\/usr\/local\/etc\/snort\/snort\.lua\s+-R\s+\/usr\/local\/etc\/rules\/local\.rules\s+-r\s+scan\.pcap\s+-A\s+alert_fast(\s+-k\s+none)?(\s+-q)?$/i, hint: 'snort -c /usr/local/etc/snort/snort.lua -R /usr/local/etc/rules/local.rules -r scan.pcap -A alert_fast -k none', output: '11/17-10:44:02.120331 [**] [1:1000001:1] "Possible SYN port scan" [**] [Priority: 0] {TCP} 10.10.10.5:61022 -> 10.10.10.20:135\n11/17-10:44:02.121872 [**] [1:1000001:1] "Possible SYN port scan" [**] [Priority: 0] {TCP} 10.10.10.5:61022 -> 10.10.10.20:3389\n…', note: 'Testing against a pcap is repeatable: the same file, the same result, every time you change the rule.' }
+      ], success: 'Rule written, validated and replayed against captured attack traffic. Repeat with a benign pcap to confirm it stays quiet.' }
+    ]
+  },
+  playbook: {
+    rules: [
+      ['Header narrows, options decide. ', 'Restrict protocol, direction and network in the header; put the detection logic in the options.'],
+      ['Match the behaviour, not one packet. ', 'Scans and floods are rates — use <code>detection_filter</code> (or threshold/event_filter) with sensible count and seconds.'],
+      ['Be precise with flags and types. ', '<code>flags:S</code> for new connections, <code>itype:8</code> for echo requests.'],
+      ['Own your SIDs. ', 'Local rules use 1,000,000+, a clear msg, and a <code>rev</code> you increment on every change.'],
+      ['Test both ways. ', 'Replay attack pcaps to prove detection and benign pcaps to prove silence.'],
+      ['Validate before deploying. ', '<code>snort -T</code> or <code>suricata -T</code> on every change — a syntax error can stop the whole sensor.']
+    ],
+    quote: ['A rule is a hypothesis about an attack. Testing is how you find out if it’s true.']
+  }
+});
+</script>
+</body>
+</html>

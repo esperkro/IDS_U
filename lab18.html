@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lab 18 — IDS Training</title>
+<link rel="stylesheet" href="module-kit.css">
+<script src="labs-access.js"></script>
+<script>LabsAccess.guard('lab18');</script>
+</head>
+<body>
+<div id="app"><noscript><p style="padding:16px">IDS Training needs JavaScript enabled.</p></noscript></div>
+<script src="module-kit.js"></script>
+<script src="questions.js"></script>
+<script src="assessment.js"></script>
+<script>
+ModuleKit.mount({
+  id: 'lab18',
+  briefing: {
+    hook: 'A model that is “99% accurate” at detecting intrusions can be completely useless. Understanding why is the most important thing you’ll learn about ML in security.',
+    lead: 'A basic <strong>ML-based IDS</strong> is a supervised classifier: each network flow or log event becomes a row of <strong>features</strong> (duration, bytes, packets, ports, flags, rates) with a <strong>label</strong> (normal or attack). You train on one part of the data, test on another, and judge the model with a <strong>confusion matrix</strong>, <strong>precision</strong> and <strong>recall</strong> — not accuracy alone.',
+    stats: [
+      { value: 'NSL-KDD', label: 'Classic teaching dataset', note: 'A cleaned-up version of KDD Cup 99. Newer options include CIC-IDS2017 and UNSW-NB15 with more modern traffic.' },
+      { value: 'P / R', label: 'Precision and recall', note: 'Precision = how many alerts were real. Recall = how many attacks were caught. You trade one against the other.' },
+      { value: 'Imbalance', label: 'Attacks are rare', note: 'When 99% of traffic is normal, “always say normal” scores 99% accuracy and catches nothing.' }
+    ],
+    objectives: [
+      'Turn traffic into labelled feature vectors.',
+      'Split data correctly and avoid leakage.',
+      'Read a confusion matrix and compute precision, recall and F1.',
+      'Choose a decision threshold based on operational cost.'
+    ],
+    blocks: [{ type: 'myths', items: [
+      { myth: 'High accuracy means a good intrusion detector.', fact: 'With rare attacks, accuracy is dominated by the normal class. Report precision, recall, F1 and the confusion matrix.' },
+      { myth: 'A model that scores well on a public dataset will work on my network.', fact: 'Datasets age and differ from your traffic. Expect a drop in performance; validate on your own labelled data.' },
+      { myth: 'Shuffling all rows before splitting is always fine.', fact: 'Flows from the same attack session can land in both train and test sets, leaking information. Split by time or session.' }
+    ] }]
+  },
+  scenario: {
+    meta: ['Capstone team', 'CIC-IDS2017 subset', 'Random forest'],
+    title: '99.8% and nobody believes it',
+    story: '<p>A student team reports a random forest with 99.8% accuracy on CIC-IDS2017. Their instructor asks three questions: How did you split the data? What is the recall on the rarest attack classes? Did any feature identify the attacker directly — like the source IP?</p><p>It turns out they shuffled all rows before splitting, and <code>Src IP</code> was one of the features.</p>',
+    blocks: [
+      { type: 'choice', title: 'Decision — What’s wrong?', prompt: 'What is the main problem with their result?', options: [
+        { text: 'Data leakage: the source IP lets the model memorise attacker machines, and random row splitting puts the same sessions in train and test. Drop identifiers and split by time.', verdict: 'good', why: 'In these lab datasets attacks come from a few known IPs, so the model learns “this IP = attack”, which never generalises to a real network.' },
+        { text: 'Random forests overfit; they should switch to deep learning.', verdict: 'bad', why: 'A different algorithm trained on the same leaky features and split would still look unrealistically good.' },
+        { text: 'Nothing is wrong, but they should report precision and recall too.', verdict: 'partial', why: 'Better metrics are needed, but they would not reveal the leakage in the features and split.' }
+      ] }
+    ]
+  },
+  practice: {
+    intro: 'Choose a decision threshold and watch the confusion matrix change, then sort good practice from leakage.',
+    blocks: [
+      { type: 'custom', title: 'Threshold & confusion matrix', tag: 'Simulator', intro: 'The model outputs an attack probability for 50 test flows (15 real attacks). Flows with probability ≥ threshold are flagged.', render: function (host, K) {
+        var atk = [0.97, 0.95, 0.93, 0.91, 0.88, 0.86, 0.82, 0.79, 0.74, 0.68, 0.61, 0.55, 0.47, 0.38, 0.29];
+        var nor = [0.72, 0.64, 0.58, 0.51, 0.44, 0.41, 0.36, 0.33, 0.31, 0.27, 0.25, 0.22, 0.2, 0.18, 0.16, 0.15, 0.13, 0.12, 0.11, 0.1, 0.09, 0.08, 0.08, 0.07, 0.06, 0.05, 0.05, 0.04, 0.04, 0.03, 0.03, 0.02, 0.02, 0.01, 0.01];
+        var t = K.el('input', { type: 'range', min: '0.05', max: '0.95', step: '0.05', value: '0.5', id: 'thr18' }), tl = K.el('label', { for: 'thr18' });
+        var cm = K.el('div', { class: 'table-wrap', style: 'margin-top:10px' }), metrics = K.el('div', { class: 'metric-grid', style: 'margin-top:10px', 'aria-live': 'polite' }), fb = K.el('div', { class: 'feedback' });
+        var strip = K.el('div', { style: 'margin-top:10px' });
+        function draw() {
+          var th = +t.value; tl.textContent = 'Decision threshold = ' + th.toFixed(2);
+          var tp = atk.filter(function (s) { return s >= th; }).length, fn = atk.length - tp;
+          var fp = nor.filter(function (s) { return s >= th; }).length, tn = nor.length - fp;
+          var prec = tp + fp ? tp / (tp + fp) : 0, rec = tp / atk.length, f1 = prec + rec ? 2 * prec * rec / (prec + rec) : 0, acc = (tp + tn) / 50;
+          cm.innerHTML = '<table><thead><tr><th></th><th>Predicted attack</th><th>Predicted normal</th></tr></thead><tbody><tr><th>Actual attack (15)</th><td class="status-good">TP = ' + tp + '</td><td class="status-bad">FN = ' + fn + '</td></tr><tr><th>Actual normal (35)</th><td class="status-bad">FP = ' + fp + '</td><td class="status-good">TN = ' + tn + '</td></tr></tbody></table>';
+          metrics.innerHTML = '';
+          [['Precision', prec], ['Recall', rec], ['F1', f1], ['Accuracy', acc]].forEach(function (m) { metrics.appendChild(K.el('div', { class: 'metric' }, [K.el('b', { text: (m[1] * 100).toFixed(0) + '%' }), K.el('span', { text: m[0] })])); });
+          var W = 640, s = '<svg class="chart" viewBox="0 0 ' + W + ' 90" role="img" aria-label="Score distribution: attacks above, normal below, with threshold line">';
+          atk.forEach(function (x) { s += '<circle cx="' + (20 + x * 600) + '" cy="28" r="6" fill="#f87171"/>'; });
+          nor.forEach(function (x, i) { s += '<circle cx="' + (20 + x * 600) + '" cy="' + (58 + (i % 3) * 8) + '" r="5" fill="#7dd3fc"/>'; });
+          s += '<line x1="' + (20 + th * 600) + '" x2="' + (20 + th * 600) + '" y1="5" y2="85" stroke="#99f6e4" stroke-width="2" stroke-dasharray="4 3"/><text x="4" y="14" fill="#b2bdd8" font-size="11">attacks</text><text x="4" y="86" fill="#b2bdd8" font-size="11">normal</text></svg>';
+          strip.innerHTML = s;
+          var v = rec >= 0.8 && prec >= 0.8 ? 'good' : 'partial';
+          K.setFeedback(fb, v, th <= 0.25 ? 'Very low threshold: almost every attack is caught (high recall) but analysts drown in false positives (low precision).' : th >= 0.75 ? 'Very high threshold: alerts are almost always real (high precision) but many attacks slip through (low recall).' : 'A balanced region. In practice, choose the threshold from costs: how expensive is a missed attack versus an analyst’s time on a false alarm?', v === 'good' ? 'Balanced' : 'Trade-off');
+        }
+        t.addEventListener('input', draw);
+        host.appendChild(K.el('div', { class: 'field' }, [tl, t]));
+        host.appendChild(strip); host.appendChild(cm); host.appendChild(metrics); host.appendChild(fb);
+        var para = K.el('button', { type: 'button', class: 'btn', style: 'margin-top:12px', text: 'Show the accuracy paradox' });
+        var pfb = K.el('div', { class: 'feedback', 'aria-live': 'polite' });
+        para.addEventListener('click', function () { K.setFeedback(pfb, 'bad', 'Real traffic: 10,000 flows, 20 attacks. A “model” that always predicts <em>normal</em> scores 9,980 / 10,000 = <strong>99.8% accuracy</strong> — with 0% recall. That’s why accuracy alone is meaningless for intrusion detection.', 'Accuracy paradox'); });
+        host.appendChild(para); host.appendChild(pfb);
+        draw();
+      } },
+      { type: 'html', html: '<section class="card block"><h3 class="block-title"><span class="block-tag">Code</span>A minimal, honest baseline in scikit-learn</h3><pre><code>import pandas as pd\nfrom sklearn.ensemble import RandomForestClassifier\nfrom sklearn.metrics import classification_report, confusion_matrix\n\ndf = pd.read_csv("flows.csv", parse_dates=["timestamp"]).sort_values("timestamp")\ndrop = ["label", "timestamp", "src_ip", "dst_ip", "flow_id"]   # identifiers leak!\nX, y = df.drop(columns=drop), (df["label"] != "BENIGN").astype(int)\n\ncut = int(len(df) * 0.7)                       # time-based split: train on the past\nX_tr, X_te, y_tr, y_te = X[:cut], X[cut:], y[:cut], y[cut:]\n\nclf = RandomForestClassifier(n_estimators=200, class_weight="balanced", random_state=42)\nclf.fit(X_tr, y_tr)\nproba = clf.predict_proba(X_te)[:, 1]\npred = (proba &gt;= 0.5).astype(int)               # tune this threshold!\n\nprint(confusion_matrix(y_te, pred))\nprint(classification_report(y_te, pred, digits=3))</code></pre><p class="small muted">Fit any scaler or feature selection on the training set only, then apply it to the test set.</p></section>' },
+      { type: 'sort', title: 'Sound practice or leakage/mistake?', left: 'Sound practice', right: 'Leakage / mistake', items: [
+        { text: 'Remove source/destination IPs and flow IDs from the features.', answer: 'left', why: 'Identifiers let the model memorise hosts instead of learning behaviour.' },
+        { text: 'Fit the StandardScaler on the full dataset before splitting.', answer: 'right', why: 'Test-set statistics leak into training. Fit on the training set only.' },
+        { text: 'Split by time: train on earlier days, test on later days.', answer: 'left', why: 'Mimics real deployment and prevents session leakage.' },
+        { text: 'Report only accuracy because it’s easy to explain.', answer: 'right', why: 'Hides poor recall on rare attacks.' },
+        { text: 'Use <code>class_weight="balanced"</code> or resampling on the training set.', answer: 'left', why: 'Helps the model pay attention to the rare attack class.' },
+        { text: 'Tune hyperparameters repeatedly against the final test set.', answer: 'right', why: 'The test set becomes part of training; use a validation split or cross-validation.' }
+      ] }
+    ]
+  },
+  playbook: {
+    rules: [
+      ['Features describe behaviour, not identity. ', 'Drop IPs, IDs and timestamps that let a model memorise the dataset.'],
+      ['Split like you’ll deploy. ', 'Train on the past, test on the future; keep sessions together.'],
+      ['Report the full picture. ', 'Confusion matrix, precision, recall and F1 — per attack class where possible.'],
+      ['Choose the threshold on purpose. ', 'Base it on the cost of misses versus false alarms, not the default 0.5.'],
+      ['Handle imbalance in training only. ', 'Class weights or resampling on the training set; never touch the test set.'],
+      ['Validate on your own traffic. ', 'Public datasets are a start; your network is the real test.']
+    ],
+    quote: ['If your intrusion detector is 99.9% accurate, the first question is: what did it learn that it shouldn’t have?']
+  }
+});
+</script>
+</body>
+</html>

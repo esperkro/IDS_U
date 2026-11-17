@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lab 08 — IDS Training</title>
+<link rel="stylesheet" href="module-kit.css">
+<script src="labs-access.js"></script>
+<script>LabsAccess.guard('lab08');</script>
+</head>
+<body>
+<div id="app"><noscript><p style="padding:16px">IDS Training needs JavaScript enabled.</p></noscript></div>
+<script src="module-kit.js"></script>
+<script src="questions.js"></script>
+<script src="assessment.js"></script>
+<script>
+ModuleKit.mount({
+  id: 'lab08',
+  briefing: {
+    hook: 'An auditor doesn’t want to hear that you monitor user activity. They want to see the evidence — complete, untampered and for the whole period.',
+    lead: 'Log analysis answers security questions; compliance reporting proves controls work. Both depend on logs that are <strong>complete</strong>, <strong>time-synchronised</strong>, <strong>protected from tampering</strong> and <strong>retained</strong> long enough. Frameworks such as PCI DSS, ISO/IEC 27001 and HIPAA all expect it.',
+    stats: [
+      { value: '12 months', label: 'PCI DSS audit-log retention', note: 'PCI DSS v4.0 requirement 10.5.1: keep at least 12 months of history, with the most recent three months immediately available.' },
+      { value: 'A.8.15', label: 'ISO/IEC 27001:2022 Logging', note: 'Annex A control 8.15 requires logs of activities, exceptions and faults to be produced, stored, protected and analysed.' },
+      { value: 'NTP', label: 'One clock for all logs', note: 'Without synchronised time you cannot build a reliable timeline across systems (ISO 27001 A.8.17).' }
+    ],
+    objectives: [
+      'Filter and query user logs to answer specific audit questions.',
+      'Protect log integrity and retention.',
+      'Map evidence to compliance requirements.',
+      'Write a clear, evidence-backed audit report.'
+    ],
+    blocks: [{ type: 'myths', items: [
+      { myth: 'Compliance means we are secure.', fact: 'Compliance is a minimum bar checked at a point in time. Good logging helps both, but passing an audit doesn’t mean attackers can’t get in.' },
+      { myth: 'Keeping logs forever is the safest approach.', fact: 'Logs often contain personal data. Keep them as long as required and justified — then delete per your retention policy (e.g. GDPR storage limitation).' },
+      { myth: 'Logs stored on the same server are fine as evidence.', fact: 'An attacker with admin rights can edit local logs. Centralise them with restricted access and integrity protection (hashing, WORM storage).' }
+    ] }]
+  },
+  scenario: {
+    meta: ['Online retailer', 'PCI DSS assessment', '2 weeks to audit'],
+    title: 'Prove it',
+    story: '<p>The QSA (assessor) asks for evidence that administrator access to the cardholder-data environment is logged and reviewed. You find: logs are kept for 90 days on each server, three servers have clocks drifting by several minutes, and log reviews happen “when someone has time”.</p>',
+    blocks: [
+      { type: 'choice', title: 'Decision 1 — Fixing the foundations', prompt: 'What do you prioritise before the audit?', options: [
+        { text: 'Centralise logs to a protected collector, sync all clocks via NTP, extend retention to 12 months (3 months searchable) and start documented daily reviews.', verdict: 'good', why: 'Addresses integrity, timeline accuracy, retention and review — the things an assessor will test.' },
+        { text: 'Write a policy saying logs are reviewed daily.', verdict: 'bad', why: 'A policy without evidence of practice is a finding waiting to happen — and it’s not honest.' },
+        { text: 'Increase local log retention on each server to 12 months.', verdict: 'partial', why: 'Fixes retention but not tampering risk, clock drift or the missing reviews.' }
+      ] },
+      { type: 'choice', title: 'Decision 2 — The report', prompt: 'What should the access-review report contain?', options: [
+        { text: 'Scope, period, data sources, query used, findings with counts, exceptions and how they were resolved, reviewer and date.', verdict: 'good', why: 'Reproducible and evidence-based: someone else could rerun the query and get the same result.' },
+        { text: 'A raw export of 2 million log lines.', verdict: 'bad', why: 'Data is not evidence of review. The assessor needs to see what you looked for and what you found.' },
+        { text: 'A one-line statement: “No issues found.”', verdict: 'partial', why: 'Maybe true, but unverifiable without scope, method and sign-off.' }
+      ] }
+    ]
+  },
+  practice: {
+    intro: 'Query a day of authentication logs from the cardholder-data environment, then build the report.',
+    blocks: [
+      { type: 'custom', title: 'Log console: CDE authentication, 17 Nov', tag: 'Query', render: function (host, K) {
+        var logs = [
+          ['07:58', 'priya.s', 'cde-db01', 'logon', 'success', 'user'], ['08:02', 'admin.raj', 'cde-db01', 'logon', 'success', 'admin'],
+          ['08:15', 'tom.b', 'cde-app02', 'logon', 'failure', 'user'], ['08:16', 'tom.b', 'cde-app02', 'logon', 'success', 'user'],
+          ['11:40', 'admin.raj', 'cde-app02', 'priv-change', 'success', 'admin'], ['13:05', 'svc_backup', 'cde-db01', 'logon', 'success', 'service'],
+          ['17:45', 'priya.s', 'cde-db01', 'logoff', 'success', 'user'], ['21:12', 'admin.lee', 'cde-db01', 'logon', 'failure', 'admin'],
+          ['21:13', 'admin.lee', 'cde-db01', 'logon', 'failure', 'admin'], ['21:14', 'admin.lee', 'cde-db01', 'logon', 'success', 'admin'],
+          ['21:20', 'admin.lee', 'cde-db01', 'priv-change', 'success', 'admin'], ['23:48', 'unknown', 'cde-app02', 'logon', 'failure', 'user'],
+          ['23:49', 'unknown', 'cde-app02', 'logon', 'failure', 'user'], ['02:03', 'admin.raj', 'cde-app02', 'logon', 'success', 'admin']
+        ];
+        function hr(t) { return +t.slice(0, 2); }
+        var fUser = K.el('select', { id: 'lf-u' }), fRes = K.el('select', { id: 'lf-r' }), fType = K.el('select', { id: 'lf-t' });
+        [['', 'All users']].concat(['priya.s', 'admin.raj', 'admin.lee', 'tom.b', 'svc_backup', 'unknown'].map(function (u) { return [u, u]; })).forEach(function (o) { fUser.appendChild(K.el('option', { value: o[0], text: o[1] })); });
+        [['', 'Any result'], ['success', 'success'], ['failure', 'failure']].forEach(function (o) { fRes.appendChild(K.el('option', { value: o[0], text: o[1] })); });
+        [['', 'Any event'], ['logon', 'logon'], ['logoff', 'logoff'], ['priv-change', 'priv-change']].forEach(function (o) { fType.appendChild(K.el('option', { value: o[0], text: o[1] })); });
+        var ah = K.el('button', { type: 'button', class: 'toggle', 'aria-pressed': 'false', text: 'After hours only (19:00–07:00)' });
+        var adm = K.el('button', { type: 'button', class: 'toggle', 'aria-pressed': 'false', text: 'Admin accounts only' });
+        var tbl = K.el('div', { class: 'table-wrap', style: 'margin-top:12px' });
+        var cnt = K.el('p', { class: 'small', 'aria-live': 'polite' });
+        function on(b) { return b.getAttribute('aria-pressed') === 'true'; }
+        function run() {
+          var rows = logs.filter(function (r) {
+            return (!fUser.value || r[1] === fUser.value) && (!fRes.value || r[4] === fRes.value) && (!fType.value || r[3] === fType.value) &&
+              (!on(ah) || hr(r[0]) >= 19 || hr(r[0]) < 7) && (!on(adm) || r[5] === 'admin');
+          });
+          tbl.innerHTML = '<table><thead><tr><th>Time</th><th>User</th><th>Host</th><th>Event</th><th>Result</th></tr></thead><tbody>' + rows.map(function (r) {
+            return '<tr><td class="log-line">' + r[0] + '</td><td>' + r[1] + '</td><td>' + r[2] + '</td><td>' + r[3] + '</td><td class="' + (r[4] === 'failure' ? 'status-bad' : '') + '">' + r[4] + '</td></tr>'; }).join('') + '</tbody></table>';
+          cnt.textContent = rows.length + ' matching event' + (rows.length === 1 ? '' : 's');
+        }
+        [fUser, fRes, fType].forEach(function (s) { s.addEventListener('change', run); });
+        [ah, adm].forEach(function (b) { b.addEventListener('click', function () { b.setAttribute('aria-pressed', String(!on(b))); run(); }); });
+        host.appendChild(K.el('div', { class: 'sim-grid two' }, [
+          K.el('div', { class: 'field' }, [K.el('label', { for: 'lf-u', text: 'User' }), fUser]),
+          K.el('div', { class: 'field' }, [K.el('label', { for: 'lf-r', text: 'Result' }), fRes]),
+          K.el('div', { class: 'field' }, [K.el('label', { for: 'lf-t', text: 'Event type' }), fType])
+        ]));
+        host.appendChild(K.el('div', { class: 'pill-row', style: 'margin-top:10px' }, [ah, adm]));
+        host.appendChild(tbl); host.appendChild(cnt);
+        // audit questions
+        var qs = [
+          ['How many <strong>admin</strong> logons (success) happened after hours?', '2', 'admin.lee at 21:14 and admin.raj at 02:03.'],
+          ['How many failed logons occurred in total?', '5', 'tom.b ×1, admin.lee ×2, unknown ×2.'],
+          ['How many privilege changes need a matching change ticket?', '2', 'admin.raj at 11:40 and admin.lee at 21:20 — the second is after hours and deserves a closer look.']
+        ];
+        host.appendChild(K.el('h4', { style: 'margin-top:16px', text: 'Audit questions — use the filters, then answer' }));
+        qs.forEach(function (q, i) {
+          var id = 'aq' + i, inp = K.el('input', { type: 'number', id: id, min: '0', inputmode: 'numeric', style: 'max-width:120px' });
+          var fb = K.el('div', { class: 'feedback', 'aria-live': 'polite' });
+          var b = K.el('button', { type: 'button', class: 'btn btn-sm', text: 'Check' });
+          b.addEventListener('click', function () { var ok = inp.value.trim() === q[1]; K.setFeedback(fb, ok ? 'good' : 'bad', ok ? q[2] : 'Not quite — adjust the filters and count again.', ok ? 'Correct' : 'Try again'); });
+          host.appendChild(K.el('div', { class: 'field', style: 'margin-top:10px' }, [K.el('label', { for: id, html: (i + 1) + '. ' + q[0] }), K.el('div', { class: 'btn-row' }, [inp, b]), fb]));
+        });
+        run();
+      } },
+      { type: 'checklist', title: 'Build the compliance report', tag: 'Report', scoreLabel: 'Report quality', intro: 'Tick what your access-review report will include.', items: [
+        { text: 'Scope (systems, accounts) and the period covered', weight: 2, why: 'Defines exactly what was reviewed.' },
+        { text: 'Data sources and the exact queries/filters used', weight: 2, why: 'Makes the review reproducible.' },
+        { text: 'Findings with counts and specific events', weight: 2, why: 'Evidence, not opinion.' },
+        { text: 'Exceptions and how each was resolved (e.g. change ticket CHG-1042)', weight: 2, why: 'Shows the control works end to end.' },
+        { text: 'Reviewer name, date and sign-off', weight: 1, why: 'Accountability and proof the review happened.' },
+        { text: 'Statement that log integrity and time sync were verified', weight: 1, why: 'Supports the reliability of the evidence.' },
+        { text: 'Full cardholder numbers copied from the logs as proof', weight: -3, why: 'Never put PANs in a report — PCI DSS restricts storing and displaying them.' },
+        { text: 'Remove the two after-hours events to keep the report “clean”', weight: -3, why: 'Hiding exceptions is falsifying evidence. Report them and their resolution.' }
+      ] }
+    ]
+  },
+  playbook: {
+    rules: [
+      ['Centralise and protect. ', 'Ship logs off the source host to a collector with restricted access and integrity protection.'],
+      ['Synchronise time. ', 'Every system uses NTP and logs a timezone, or your timelines are guesses.'],
+      ['Retain on purpose. ', 'Meet the strictest applicable requirement (e.g. PCI DSS 12 months) — and delete when it expires.'],
+      ['Review on a schedule. ', 'Documented, regular reviews with named reviewers are what auditors test.'],
+      ['Make reports reproducible. ', 'Scope, period, sources, query, findings, exceptions, sign-off.'],
+      ['Minimise sensitive data. ', 'Mask or exclude card numbers, passwords and unnecessary personal data in logs and reports.']
+    ],
+    quote: ['If it isn’t logged, it didn’t happen. If it isn’t reviewed, nobody knows it happened.']
+  }
+});
+</script>
+</body>
+</html>

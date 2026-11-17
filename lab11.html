@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lab 11 — IDS Training</title>
+<link rel="stylesheet" href="module-kit.css">
+<script src="labs-access.js"></script>
+<script>LabsAccess.guard('lab11');</script>
+</head>
+<body>
+<div id="app"><noscript><p style="padding:16px">IDS Training needs JavaScript enabled.</p></noscript></div>
+<script src="module-kit.js"></script>
+<script src="questions.js"></script>
+<script src="assessment.js"></script>
+<script>
+ModuleKit.mount({
+  id: 'lab11',
+  briefing: {
+    hook: 'A network IDS is a sensor that reads every packet on a link and compares it with thousands of signatures. Installing it takes minutes; configuring it so the alerts mean something is the real work.',
+    lead: '<strong>Snort</strong> and <strong>Suricata</strong> are the two best-known open-source network intrusion detection systems. Both use signature rules with a very similar syntax. Suricata is multi-threaded and writes rich JSON (<code>eve.json</code>); Snort 3 is a major redesign configured in Lua. This lab installs Suricata on Ubuntu; the concepts transfer directly to Snort.',
+    stats: [
+      { value: 'IDS / IPS', label: 'Two operating modes', note: 'Passive IDS watches a copy of traffic and alerts. Inline IPS sits in the path and can drop packets.' },
+      { value: 'eve.json', label: 'Suricata’s main output', note: 'One JSON object per event — alerts, flows, DNS, HTTP, TLS — ready for a SIEM.' },
+      { value: '-T', label: 'Test before you start', note: '<code>suricata -T</code> and <code>snort -T</code> validate the configuration and rules without running the sensor.' }
+    ],
+    objectives: [
+      'Install Suricata from the OISF stable PPA on Ubuntu.',
+      'Set <code>HOME_NET</code> and the capture interface in <code>suricata.yaml</code>.',
+      'Download rules with <code>suricata-update</code> and validate with <code>-T</code>.',
+      'Generate and read a test alert in <code>fast.log</code> and <code>eve.json</code>.'
+    ],
+    blocks: [{ type: 'myths', items: [
+      { myth: 'Install it and it will start catching attacks.', fact: 'Without the right interface, HOME_NET and rules, a sensor can run for weeks seeing nothing — or alerting on everything.' },
+      { myth: 'Snort and Suricata rules are completely different languages.', fact: 'They share the same basic rule structure. Many rules work in both, though each engine has its own keywords and extensions.' },
+      { myth: 'An IDS can see inside all encrypted traffic.', fact: 'It cannot read TLS payloads without decryption, but it can still inspect metadata such as SNI, certificates, JA3/JA4 fingerprints and flow behaviour.' }
+    ] }]
+  },
+  scenario: {
+    meta: ['Lab sensor VM', 'Ubuntu 22.04', 'Interface enp0s8'],
+    title: 'Running, but silent',
+    story: '<p>Arjun installed Suricata on the lab sensor, started the service and ran an Nmap scan from Kali. Two hours later <code>fast.log</code> is empty. <code>systemctl status suricata</code> says <em>active (running)</em>. The sensor has two NICs: <code>enp0s3</code> (temporary NAT for updates) and <code>enp0s8</code> (the internal lab network, promiscuous mode on).</p>',
+    blocks: [
+      { type: 'choice', title: 'Decision — What do you check first?', prompt: 'What is the most likely cause, and the right check?', options: [
+        { text: 'Check <code>suricata.log</code> and the config: Suricata is probably capturing on <code>enp0s3</code> or has no rules loaded. Fix the interface/rules and run <code>suricata -T</code>.', verdict: 'good', why: 'The service can be “running” while listening on the wrong NIC or with zero rules. The startup log states which interface and how many rules loaded.' },
+        { text: 'Reinstall Suricata from source.', verdict: 'bad', why: 'Nothing suggests the package is broken. Reinstalling wastes time and keeps the same configuration mistake.' },
+        { text: 'Run a louder scan so the IDS notices.', verdict: 'partial', why: 'Traffic volume isn’t the issue if the sensor is watching the wrong interface — but checking a known-trigger test is a good idea after fixing config.' }
+      ] }
+    ]
+  },
+  practice: {
+    intro: 'Install, configure and validate Suricata, then fire a test alert.',
+    blocks: [
+      { type: 'terminal', title: 'Suricata install & first alert', host: 'student@sensor', prompt: '$', motd: 'Ubuntu sensor. Temporary NAT adapter is connected for package installation.', tasks: [
+        { goal: 'Add the OISF stable PPA: <code>sudo add-apt-repository ppa:oisf/suricata-stable</code>', match: /^sudo\s+add-apt-repository\s+(-y\s+)?ppa:oisf\/suricata-stable(\s+-y)?$/i, hint: 'sudo add-apt-repository -y ppa:oisf/suricata-stable', output: 'Repository: \'deb https://ppa.launchpadcontent.net/oisf/suricata-stable/ubuntu/ jammy main\'\nAdding repository.' },
+        { goal: 'Update package lists and install suricata', match: /^sudo\s+apt(-get)?\s+update\s*&&\s*sudo\s+apt(-get)?\s+install\s+(-y\s+)?suricata(\s+-y)?$/i, hint: 'sudo apt update && sudo apt install -y suricata', output: 'Get:1 https://ppa.launchpadcontent.net/oisf/suricata-stable ...\nSetting up suricata (7.0.x) ...' },
+        { goal: 'Confirm the version: <code>suricata -V</code>', match: /^(sudo\s+)?suricata\s+(-V|--version)$/, hint: 'suricata -V', output: 'This is Suricata version 7.0.x RELEASE' },
+        { goal: 'Set the capture interface and HOME_NET (open the config): <code>sudo nano /etc/suricata/suricata.yaml</code>', match: /^sudo\s+(nano|vi|vim)\s+\/etc\/suricata\/suricata\.yaml$/i, hint: 'sudo nano /etc/suricata/suricata.yaml', output: '[edited] vars.address-groups.HOME_NET: "[10.10.10.0/24]"\n[edited] af-packet: - interface: enp0s8\n[saved]', note: 'In real life also check community-id and that eve-log is enabled.' },
+        { goal: 'Download the ET Open ruleset: <code>sudo suricata-update</code>', match: /^sudo\s+suricata-update$/i, hint: 'sudo suricata-update', output: 'Fetching https://rules.emergingthreats.net/open/suricata-7.0/emerging.rules.tar.gz.\nLoaded 48,xxx rules.\nWriting rules to /var/lib/suricata/rules/suricata.rules: total: 48xxx; enabled: 3xxxx' },
+        { goal: 'Validate the config and rules: <code>sudo suricata -T -c /etc/suricata/suricata.yaml -v</code>', match: /^sudo\s+suricata\s+-T\s+-c\s+\/etc\/suricata\/suricata\.yaml(\s+-v)?$/i, hint: 'sudo suricata -T -c /etc/suricata/suricata.yaml -v', output: 'Info: suricata: Running suricata under test mode\nInfo: detect: 1 rule files processed. 3xxxx rules successfully loaded, 0 rules failed\nNotice: suricata: Configuration provided was successfully loaded. Exiting.' },
+        { goal: 'Restart the service', match: /^sudo\s+systemctl\s+restart\s+suricata$/i, hint: 'sudo systemctl restart suricata', output: '(restarted)' },
+        { goal: 'Watch alerts live: <code>sudo tail -f /var/log/suricata/fast.log</code>', match: /^sudo\s+tail\s+-f\s+\/var\/log\/suricata\/fast\.log$/i, hint: 'sudo tail -f /var/log/suricata/fast.log', output: '11/17/2026-10:21:04.512  [**] [1:2010937:3] ET SCAN Suspicious inbound to mySQL port 3306 [**] [Classification: Potentially Bad Traffic] [Priority: 2] {TCP} 10.10.10.5:51544 -> 10.10.10.20:3306\n11/17/2026-10:21:04.530  [**] [1:2010939:3] ET SCAN Suspicious inbound to PostgreSQL port 5432 [**] [Classification: Potentially Bad Traffic] [Priority: 2] {TCP} 10.10.10.5:51544 -> 10.10.10.20:5432', note: 'The Nmap scan from Kali now produces alerts: [gid:sid:rev] message, classification, priority, protocol and flow.' }
+      ], extra: [
+        { match: /^sudo\s+tail\s+(-n\s+\d+\s+)?\/var\/log\/suricata\/suricata\.log$/i, output: 'Info: runmodes: enp0s8: creating 2 threads\nNotice: threads: Threads created -> W: 2 FM: 1 FR: 1   Engine started.' },
+        { match: /^(sudo\s+)?jq/i, output: '{"event_type":"alert","src_ip":"10.10.10.5","dest_ip":"10.10.10.20","dest_port":3306,"alert":{"signature_id":2010937,"signature":"ET SCAN Suspicious inbound to mySQL port 3306","severity":2}}' }
+      ], success: 'Suricata is installed, listening on the lab interface with ET Open rules, validated, and alerting on scan traffic.' },
+      { type: 'redflags', title: 'Review a suricata.yaml', intro: 'This sensor monitors the lab network <code>10.10.10.0/24</code> on <code>enp0s8</code>. Tap the configuration lines that are wrong.', header: '/etc/suricata/suricata.yaml (excerpt)', dark: true, mono: true, items: [
+        { text: 'HOME_NET: "any"', flag: true, why: 'With HOME_NET=any, rules that depend on direction (external → home) can’t work properly. Set it to the networks you protect: <code>[10.10.10.0/24]</code>.' },
+        { text: 'EXTERNAL_NET: "!$HOME_NET"', flag: false, why: 'The usual default: everything that isn’t home.' },
+        { text: 'af-packet:\n  - interface: enp0s3', flag: true, why: 'enp0s3 is the temporary NAT adapter. The sensor must capture on the lab interface, enp0s8.' },
+        { text: 'default-rule-path: /var/lib/suricata/rules', flag: false, why: 'Where suricata-update writes its merged rule file.' },
+        { text: 'rule-files:\n  - suricata.rules', flag: false, why: 'The single merged file produced by suricata-update.' },
+        { text: '- eve-log:\n    enabled: no', flag: true, why: 'eve.json is the richest output and what you will feed into a SIEM. Enable it.' },
+        { text: 'default-log-dir: /var/log/suricata/', flag: false, why: 'Standard log directory.' }
+      ] }
+    ]
+  },
+  playbook: {
+    rules: [
+      ['Capture on the right interface. ', 'Confirm in <code>suricata.log</code> which NIC is in use and that it sees traffic.'],
+      ['Define HOME_NET precisely. ', 'List the networks you protect; directional rules depend on it.'],
+      ['Manage rules with a tool. ', '<code>suricata-update</code> (or PulledPork for Snort) keeps rulesets current and reproducible.'],
+      ['Validate every change. ', 'Run <code>suricata -T</code> / <code>snort -T</code> before restarting.'],
+      ['Prove it with a known trigger. ', 'After every change, generate a harmless test alert and check it arrives.'],
+      ['Keep the sensor itself hardened. ', 'No unnecessary services, management access only from the admin network, and patched packages.']
+    ],
+    quote: ['A silent IDS is either watching a quiet network or watching the wrong one. Prove which.']
+  }
+});
+</script>
+</body>
+</html>

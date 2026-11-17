@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lab 04 — IDS Training</title>
+<link rel="stylesheet" href="module-kit.css">
+<script src="labs-access.js"></script>
+<script>LabsAccess.guard('lab04');</script>
+</head>
+<body>
+<div id="app"><noscript><p style="padding:16px">IDS Training needs JavaScript enabled.</p></noscript></div>
+<script src="module-kit.js"></script>
+<script src="questions.js"></script>
+<script src="assessment.js"></script>
+<script>
+ModuleKit.mount({
+  id: 'lab04',
+  briefing: {
+    hook: 'You can’t call something abnormal until you know what normal looks like. A baseline is the measuring stick every user-behaviour detection depends on.',
+    lead: 'A <strong>behavioural baseline</strong> describes how a user, group or system usually behaves: when they log on, from where, what they run, what they access and how much data they move. Good baselines are built from enough history, cleaned of known incidents and kept up to date when roles change.',
+    stats: [
+      { value: 'Weeks', label: 'Not hours of history', note: 'A baseline should span at least one full business cycle (weekdays, weekends, month-end) or it will flag routine events as anomalies.' },
+      { value: 'Peer', label: 'Groups beat individuals for new users', note: 'A new starter has no history; compare them to colleagues in the same role until their own baseline matures.' },
+      { value: '0', label: 'Known incidents in the training data', note: 'If an attack is inside your baseline period, the attack becomes “normal”. Exclude or label it.' }
+    ],
+    objectives: [
+      'Choose behavioural signals that are useful for detection.',
+      'Build a simple time-of-day baseline from log history.',
+      'Explain seasonality, peer groups and baseline drift.',
+      'Compare new activity against a baseline and judge deviations.'
+    ],
+    blocks: [{ type: 'myths', items: [
+      { myth: 'One week of logs is plenty for a baseline.', fact: 'A single week can miss month-end, on-call rotations and holidays. Use enough history to capture the user’s real cycles, and refresh it.' },
+      { myth: 'Anything outside the baseline is an attack.', fact: 'Deviations are leads, not verdicts. Travel, project deadlines and role changes all cause legitimate anomalies.' },
+      { myth: 'Once built, a baseline is done.', fact: 'Behaviour drifts. Re-baseline after role changes and use rolling windows so “normal” keeps up with reality.' }
+    ] }]
+  },
+  scenario: {
+    meta: ['Finance team, 12 users', 'Wazuh + Windows logs', 'Q4 close approaching'],
+    title: 'Month-end looks like an attack',
+    story: '<p>The SOC built a baseline for the finance team from the first two weeks of October. On 31 October the detection lights up: six finance users logged on after 21:00, three accessed the payroll share for the first time in the baseline period, and data downloads were 4× the average.</p><p>The analyst on shift is about to raise six high-severity incidents.</p>',
+    blocks: [
+      { type: 'choice', title: 'Decision 1 — What’s the real problem?', prompt: 'What best explains the flood of alerts?', options: [
+        { text: 'The baseline window missed month-end close, a recurring busy period. Rebuild it over several months and model the cycle.', verdict: 'good', why: 'Seasonality is the classic baselining mistake. The behaviour is unusual for early October, not for finance at month-end.' },
+        { text: 'The detection threshold is too sensitive; just double it.', verdict: 'partial', why: 'Raising the threshold reduces noise but also blinds you to real anomalies the rest of the month. Fix the baseline first.' },
+        { text: 'Six users behaving the same way at once proves a coordinated insider attack.', verdict: 'bad', why: 'Several peers deviating together usually indicates a shared business reason, not a conspiracy. Check context before escalating.' }
+      ] },
+      { type: 'choice', title: 'Decision 2 — A new hire joins finance', prompt: 'How should you judge the new hire’s activity in their first month?', options: [
+        { text: 'Compare against the finance <strong>peer group</strong> baseline until their personal history is long enough.', verdict: 'good', why: 'Peer groups give a sensible “normal” for someone with no history and highlight activity that is unusual for the role.' },
+        { text: 'Exclude them from monitoring until they have 30 days of history.', verdict: 'bad', why: 'New accounts are a favourite target and a common insider-risk window. Never leave them unmonitored.' },
+        { text: 'Use the company-wide baseline for all users.', verdict: 'partial', why: 'Better than nothing, but a finance user and a developer behave very differently; the result will be noisy.' }
+      ] }
+    ]
+  },
+  practice: {
+    intro: 'Build a time-of-day baseline from 14 days of logons, then judge new events against it.',
+    blocks: [
+      { type: 'custom', title: 'Baseline builder: logon hours for user <code>r.mehta</code>', tag: 'Builder', render: function (host, K) {
+        // 14 days of logon counts per hour (synthetic training data)
+        var counts = [0,0,0,0,0,0,1,4,11,9,6,5,3,6,7,5,4,3,1,0,0,0,0,0];
+        var total = counts.reduce(function (a, b) { return a + b; }, 0);
+        var chart = K.el('div');
+        var start = K.el('input', { type: 'range', min: '0', max: '23', value: '0', id: 'bl-start' });
+        var end = K.el('input', { type: 'range', min: '0', max: '23', value: '23', id: 'bl-end' });
+        var out = K.el('p', { 'aria-live': 'polite' });
+        var fb = K.el('div', { class: 'feedback' });
+        function draw() {
+          var s = +start.value, e = +end.value;
+          if (s > e) { var t = s; s = e; e = t; }
+          var inside = counts.slice(s, e + 1).reduce(function (a, b) { return a + b; }, 0);
+          chart.innerHTML = K.lineChart({ values: counts, bars: true, min: 0, label: 'Logons per hour of day over 14 days', labels: counts.map(function (_, i) { return i % 3 === 0 ? String(i).padStart(2, '0') : ''; }), highlight: function (v, i) { return i >= s && i <= e ? '#fcd34d' : '#46557f'; } });
+          var width = e - s + 1;
+          out.textContent = 'Normal window: ' + String(s).padStart(2, '0') + ':00–' + String(e).padStart(2, '0') + ':59 · covers ' + inside + ' of ' + total + ' logons (' + Math.round(inside / total * 100) + '%) · window width ' + width + ' h';
+          var cov = inside / total;
+          if (cov >= 0.95 && width <= 13) K.setFeedback(fb, 'good', 'Tight and representative: almost all real activity is inside, and quiet hours are outside so off-hours logons will stand out.', 'Good baseline');
+          else if (cov < 0.95) K.setFeedback(fb, 'bad', 'Too narrow — routine logons fall outside the window and will generate false positives.', 'Too narrow');
+          else K.setFeedback(fb, 'partial', 'Everything is covered, but the window is so wide that a 03:00 logon would look normal. Tighten it.', 'Too wide');
+        }
+        start.addEventListener('input', draw); end.addEventListener('input', draw);
+        host.appendChild(chart);
+        host.appendChild(K.el('div', { class: 'sim-grid two', style: 'margin-top:12px' }, [
+          K.el('div', { class: 'field' }, [K.el('label', { for: 'bl-start', text: 'Window start hour' }), start]),
+          K.el('div', { class: 'field' }, [K.el('label', { for: 'bl-end', text: 'Window end hour' }), end])
+        ]));
+        host.appendChild(out); host.appendChild(fb);
+        host.appendChild(K.el('p', { class: 'small muted', html: 'Aim: cover at least 95% of historical logons with a window no wider than 13 hours. (Real tools use probabilities per hour rather than a hard window — this is the intuition.)' }));
+        draw();
+      } },
+      { type: 'sort', title: 'New events vs. r.mehta’s baseline', left: 'Within baseline', right: 'Deviation — investigate', intro: 'Baseline: weekday logons 07:00–19:00 from LAPTOP-RM14 in Pune; uses Excel, Outlook, SAP GUI; ~200 MB/day to SharePoint.', items: [
+        { text: 'Tue 08:42 — logon from LAPTOP-RM14, opens SAP GUI.', answer: 'left', why: 'Usual time, device and application.' },
+        { text: 'Sat 03:12 — logon from an unknown host <code>DESKTOP-8XQ2</code>.', answer: 'right', why: 'Unusual day, hour <em>and</em> device — several deviations stacking up.' },
+        { text: 'Thu 16:05 — 180 MB uploaded to SharePoint.', answer: 'left', why: 'In line with typical daily volume.' },
+        { text: 'Wed 11:20 — <code>psexec.exe</code> launched against a file server.', answer: 'right', why: 'A remote-admin tool is far outside a finance user’s normal process set.' },
+        { text: 'Mon 18:40 — logon from LAPTOP-RM14, Outlook only.', answer: 'left', why: 'Late-ish but inside the window, normal device and app.' },
+        { text: 'Fri 14:00 — 9 GB copied to a personal cloud storage domain.', answer: 'right', why: 'Volume ~45× normal to an unsanctioned destination — potential exfiltration.' }
+      ] },
+      { type: 'checklist', title: 'Which signals belong in a user baseline?', tag: 'Score', scoreLabel: 'Baseline quality', intro: 'Tick the signals you would include. Some options hurt more than they help.', items: [
+        { text: 'Logon times and days', weight: 2, why: 'Off-hours access is one of the most useful simple deviations.' },
+        { text: 'Source hosts, IPs and geolocation', weight: 2, why: 'New devices and locations catch stolen credentials.' },
+        { text: 'Processes and tools executed', weight: 2, why: 'Admin or attack tools used by non-admins stand out quickly.' },
+        { text: 'Volume of data read, uploaded or printed', weight: 2, why: 'The core signal for exfiltration and insider risk.' },
+        { text: 'Privileged actions and group changes', weight: 2, why: 'Privilege use should be rare and predictable.' },
+        { text: 'Resources accessed (shares, apps, databases)', weight: 1, why: 'First-time access to sensitive data is worth a look.' },
+        { text: 'Include the week of last month’s known breach in training data', weight: -3, why: 'Training on an incident teaches the model that the attack is normal.' },
+        { text: 'Full contents of users’ personal email', weight: -2, why: 'Not needed for behaviour baselining and raises serious privacy and legal concerns. Collect the minimum necessary.' }
+      ] }
+    ]
+  },
+  playbook: {
+    rules: [
+      ['Baseline a full cycle. ', 'Cover weekdays, weekends and recurring busy periods such as month-end or on-call weeks.'],
+      ['Clean the training data. ', 'Exclude or label known incidents and test activity so they don’t become “normal”.'],
+      ['Use peers for context. ', 'Compare users with others in the same role, especially new starters and people who change jobs.'],
+      ['Pick signals that answer questions. ', 'Time, place, device, process, privilege and data volume beat collecting everything.'],
+      ['Refresh continuously. ', 'Rolling windows and re-baselining after role changes keep “normal” accurate.'],
+      ['Respect privacy. ', 'Collect the minimum needed, document why, and follow your organisation’s policy and local law.']
+    ],
+    quote: ['An anomaly is only as meaningful as the baseline it was measured against.']
+  }
+});
+</script>
+</body>
+</html>

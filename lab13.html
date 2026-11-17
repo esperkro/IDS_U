@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lab 13 — IDS Training</title>
+<link rel="stylesheet" href="module-kit.css">
+<script src="labs-access.js"></script>
+<script>LabsAccess.guard('lab13');</script>
+</head>
+<body>
+<div id="app"><noscript><p style="padding:16px">IDS Training needs JavaScript enabled.</p></noscript></div>
+<script src="module-kit.js"></script>
+<script src="questions.js"></script>
+<script src="assessment.js"></script>
+<script>
+ModuleKit.mount({
+  id: 'lab13',
+  briefing: {
+    hook: 'Attackers leave footprints in many places at once: an IDS alert here, a 404 storm there, a burst of failed SSH logins somewhere else. Each one alone is noise. Together they’re a story.',
+    lead: 'Log analysis is about <strong>correlation</strong>: lining up system logs (<code>auth.log</code>, <code>syslog</code>, Windows events), network logs (firewall, NetFlow, Zeek, IDS alerts) and application logs (web access logs) by time, IP and user to recognise attack patterns such as scanning, brute force, web exploitation and data exfiltration.',
+    stats: [
+      { value: 'IP + time', label: 'The two correlation keys', note: 'Most cross-log investigations start by pivoting on a source IP within a time window.' },
+      { value: '4xx storms', label: 'A web-scanning fingerprint', note: 'Hundreds of 404s for admin paths in seconds usually mean an automated scanner, not a lost user.' },
+      { value: 'uniq -c', label: 'Count before you read', note: '<code>sort | uniq -c | sort -nr</code> turns 100,000 lines into the 10 that matter.' }
+    ],
+    objectives: [
+      'Extract and count indicators from logs with grep, awk, sort and uniq.',
+      'Recognise scanning, brute force, SQL injection and path traversal in logs.',
+      'Correlate system, web, firewall and IDS logs on IP and time.',
+      'Separate reconnaissance from exploitation attempts.'
+    ],
+    blocks: [{ type: 'myths', items: [
+      { myth: 'An IDS alert means the attack succeeded.', fact: 'Most alerts show an <em>attempt</em>. Check the response: HTTP status, bytes returned, follow-up logins or processes on the target.' },
+      { myth: 'A 200 OK on a SQL injection attempt proves a breach.', fact: 'Many apps return 200 for error pages. Look at response size, timing and what happened next before concluding.' },
+      { myth: 'Blocked by the firewall means safe to ignore.', fact: 'Blocked attempts still reveal who is targeting you and how — useful for blocking and for spotting the one attempt that wasn’t blocked.' }
+    ] }]
+  },
+  scenario: {
+    meta: ['E-commerce web server', 'Nginx + SSH', 'Saturday 03:00–03:30'],
+    title: 'One IP, four logs',
+    story: '<p>At 03:02 Suricata alerts “ET SCAN Nmap Scripting Engine User-Agent Detected” from <code>203.0.113.77</code>. At 03:05 the web access log shows hundreds of 404s from the same IP. At 03:11 there are URLs containing <code>UNION SELECT</code>. At 03:20 the firewall logs an outbound connection from the web server to <code>203.0.113.77:4444</code>.</p>',
+    blocks: [
+      { type: 'choice', title: 'Decision — What story do the logs tell?', prompt: 'What is the most accurate interpretation?', options: [
+        { text: 'Reconnaissance → web content discovery → SQL injection → likely successful exploitation with a reverse shell to port 4444. Escalate as an incident now.', verdict: 'good', why: 'The outbound connection from the server back to the attacker is the turning point: attempts became probable compromise.' },
+        { text: 'A routine internet scan — these happen all the time. Block the IP and close the ticket.', verdict: 'bad', why: 'Routine scans don’t make the server connect back to the scanner. Blocking now doesn’t remove a foothold that may already exist.' },
+        { text: 'A SQL injection attempt; check whether the database was dumped.', verdict: 'partial', why: 'Right to check the database, but you missed the outbound connection, which suggests code execution on the server itself.' }
+      ] }
+    ]
+  },
+  practice: {
+    intro: 'Count indicators on the command line, then read the correlated logs.',
+    blocks: [
+      { type: 'terminal', title: 'Log triage with grep, awk and uniq', host: 'analyst@web01', prompt: '$', motd: 'Logs: /var/log/auth.log, /var/log/nginx/access.log', tasks: [
+        { goal: 'Count failed SSH passwords per source IP (top first)', match: /^grep\s+["']?failed password["']?\s+\/var\/log\/auth\.log\s*\|\s*awk\s+'\{print \$\(NF-3\)\}'\s*\|\s*sort\s*\|\s*uniq\s+-c\s*\|\s*sort\s+-nr(\s*\|\s*head(\s+-n?\s*\d+)?)?$/i, hint: "grep \"Failed password\" /var/log/auth.log | awk '{print $(NF-3)}' | sort | uniq -c | sort -nr | head", output: '   1843 198.51.100.23\n    412 203.0.113.77\n      3 10.0.0.12', note: '“from <IP> port <n> ssh2” — the IP is 3 fields before the end.' },
+        { goal: 'Did any of those IPs succeed? Search for <code>Accepted</code>', match: /^grep\s+["']?accepted["']?\s+\/var\/log\/auth\.log$/i, hint: 'grep "Accepted" /var/log/auth.log', output: 'Nov 15 08:01:12 web01 sshd[2210]: Accepted publickey for deploy from 10.0.0.12 port 50122 ssh2\nNov 15 03:09:44 web01 sshd[4410]: Accepted password for backup from 203.0.113.77 port 40112 ssh2' , note: 'A password login for “backup” from the brute-forcing IP — serious.' },
+        { goal: 'Count HTTP status codes in the web log (status is field 9)', match: /^awk\s+'\{print \$9\}'\s+\/var\/log\/nginx\/access\.log\s*\|\s*sort\s*\|\s*uniq\s+-c\s*\|\s*sort\s+-nr$/i, hint: "awk '{print $9}' /var/log/nginx/access.log | sort | uniq -c | sort -nr", output: '  12044 200\n   2310 404\n    188 500\n     95 301' },
+        { goal: 'Find SQL injection and traversal attempts', match: /^grep\s+-\w*i\w*\s+.*(union|select).*\/var\/log\/nginx\/access\.log$/i, hint: "grep -Ei \"union|select|\\.\\./|%2e%2e\" /var/log/nginx/access.log", output: '203.0.113.77 - - [15/Nov/2026:03:11:02 +0000] "GET /product.php?id=1%20UNION%20SELECT%20username,password%20FROM%20users-- HTTP/1.1" 200 5120 "-" "sqlmap/1.7"\n203.0.113.77 - - [15/Nov/2026:03:12:40 +0000] "GET /download.php?file=../../../../etc/passwd HTTP/1.1" 200 1893 "-" "Mozilla/5.0"', note: 'sqlmap user-agent, and a traversal returning 1,893 bytes — /etc/passwd is roughly that size. Likely success.' }
+      ], extra: [
+        { match: /^(cat|less|more)\s+/i, output: '(102,388 lines — use grep/awk to filter instead of reading everything)' },
+        { match: /^wc\s+-l/i, output: '102388 /var/log/nginx/access.log' }
+      ], success: 'You counted the noise, found the success hidden in it, and linked the SSH and web evidence to the same IP.' },
+      { type: 'sort', title: 'Reconnaissance or exploitation attempt?', left: 'Reconnaissance', right: 'Exploitation attempt', items: [
+        { text: '<code>GET /wp-login.php</code>, <code>/admin/</code>, <code>/.git/config</code> … 600 different paths, all 404.', answer: 'left', why: 'Content discovery — mapping what exists.' },
+        { text: '<code>GET /index.php?id=1%27%20OR%201=1--</code>', answer: 'right', why: 'Classic SQL injection payload attempting to change query logic.' },
+        { text: 'Firewall: SYN packets to ports 1–1024 on 50 hosts within 30 seconds.', answer: 'left', why: 'A horizontal/vertical port scan.' },
+        { text: '<code>GET /cgi-bin/test.cgi</code> with User-Agent <code>() { :; }; /bin/bash -c "wget …"</code>', answer: 'right', why: 'Shellshock exploitation payload in a header.' },
+        { text: 'Suricata: “ET SCAN Nmap Scripting Engine User-Agent Detected”.', answer: 'left', why: 'Nmap NSE probing — identifying services and versions.' },
+        { text: '<code>GET /download.php?file=../../../../etc/shadow</code>', answer: 'right', why: 'Path traversal trying to read a sensitive file.' }
+      ] }
+    ]
+  },
+  playbook: {
+    rules: [
+      ['Count, then read. ', 'Aggregate with <code>sort | uniq -c</code> before reading individual lines.'],
+      ['Pivot on IP and time. ', 'Take one indicator and search every log source in the same window.'],
+      ['Look for the success. ', '“Accepted”, unusual 200 responses with suspicious sizes, outbound connections from servers.'],
+      ['Know the patterns. ', '404 storms = discovery; quotes and UNION = SQLi; <code>../</code> = traversal; many SYNs = scanning.'],
+      ['Normalise time zones. ', 'Web logs, syslog and firewalls may log in different zones — convert to UTC before correlating.'],
+      ['Write the story. ', 'Recon → attempt → success → action. Each step should cite a log line.']
+    ],
+    quote: ['One log tells you something happened. Correlated logs tell you what happened.']
+  }
+});
+</script>
+</body>
+</html>

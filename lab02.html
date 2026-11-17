@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lab 02 — IDS Training</title>
+<link rel="stylesheet" href="module-kit.css">
+<script src="labs-access.js"></script>
+<script>LabsAccess.guard('lab02');</script>
+</head>
+<body>
+<div id="app"><noscript><p style="padding:16px">IDS Training needs JavaScript enabled.</p></noscript></div>
+<script src="module-kit.js"></script>
+<script src="questions.js"></script>
+<script src="assessment.js"></script>
+<script>
+ModuleKit.mount({
+  id: 'lab02',
+  briefing: {
+    hook: 'Linux will happily let someone edit <code>/etc/sudoers</code> at 3 a.m. and tell nobody. <strong>auditd</strong> is how you make the kernel keep a record.',
+    lead: 'The Linux Audit framework hooks into the kernel and records events you define — file access, system calls, logins, privilege changes — to <code>/var/log/audit/audit.log</code>. It is the foundation of user-level intrusion detection on Linux and a requirement in many hardening benchmarks.',
+    stats: [
+      { value: 'rwxa', label: 'Four watch permissions', note: 'read, write, execute and attribute change — combine them with <code>-p</code> on a file watch.' },
+      { value: 'auid', label: 'The login UID survives sudo', note: 'The audit UID records who originally logged in, even after <code>su</code> or <code>sudo</code> changes the effective user.' },
+      { value: '-e 2', label: 'Lock the rules', note: 'Makes the audit configuration immutable until reboot, so an intruder cannot quietly delete your rules.' }
+    ],
+    objectives: [
+      'Install, enable and check the status of auditd.',
+      'Write file-watch rules (<code>-w</code>) and syscall rules (<code>-a</code>) with keys.',
+      'Make rules persistent with <code>/etc/audit/rules.d/</code> and <code>augenrules</code>.',
+      'Query events with <code>ausearch</code> and summarise them with <code>aureport</code>.'
+    ],
+    blocks: [{ type: 'myths', items: [
+      { myth: 'Rules added with auditctl survive a reboot.', fact: '<code>auditctl</code> changes the running kernel only. Put rules in <code>/etc/audit/rules.d/*.rules</code> and load them with <code>augenrules --load</code>.' },
+      { myth: 'Audit everything — more logging is always safer.', fact: 'Over-broad syscall rules can flood the disk and slow the system. Audit what answers a question: identity files, privilege use, executions by real users.' },
+      { myth: 'If root ran the command, you can’t tell which person did it.', fact: 'The <code>auid</code> field keeps the original login user, so <code>sudo</code> activity is still attributable to a person.' }
+    ] }]
+  },
+  scenario: {
+    meta: ['Ubuntu 22.04', 'Shared dev server', 'Monday 09:10'],
+    title: 'Who changed sudoers?',
+    story: '<p>On Monday the team lead notices a new line in <code>/etc/sudoers</code>: <code>deploy ALL=(ALL) NOPASSWD:ALL</code>. Nobody admits adding it. Five engineers have sudo rights and all of them use <code>sudo -i</code> to become root.</p><p>The server has auditd installed with the default empty rule set. You have been asked to make sure that next time, there is an answer.</p>',
+    blocks: [
+      { type: 'choice', title: 'Decision 1 — What rule do you add first?', prompt: 'Which rule best answers “who changed sudoers” in future?', options: [
+        { text: '<code>-w /etc/sudoers -p wa -k sudoers</code> plus the same for <code>/etc/sudoers.d/</code>, in a file under <code>/etc/audit/rules.d/</code>.', verdict: 'good', why: 'A write/attribute watch on both locations, tagged with a key, made persistent. Events will carry the auid of the person who logged in.' },
+        { text: '<code>auditctl -w /etc/sudoers -p r -k sudoers</code> from the shell.', verdict: 'partial', why: 'Right file, wrong permission: <code>r</code> logs reads, not changes. And running auditctl directly is lost at the next reboot.' },
+        { text: '<code>-a always,exit -S all</code> so nothing is ever missed.', verdict: 'bad', why: 'Auditing every syscall for every process will flood the log and hurt performance — and still needs a key to find anything.' }
+      ] },
+      { type: 'choice', title: 'Decision 2 — Protecting the evidence', prompt: 'A root user could simply delete your rules. What helps most?', options: [
+        { text: 'End the rules file with <code>-e 2</code> and forward audit logs to a remote collector.', verdict: 'good', why: 'Immutable mode blocks rule changes until reboot (and a reboot is itself noticeable); remote forwarding keeps a copy the attacker can’t edit.' },
+        { text: 'Make <code>audit.log</code> read-only with <code>chmod 400</code>.', verdict: 'partial', why: 'Root ignores file permissions, so this barely slows an attacker. It doesn’t protect the rules either.' },
+        { text: 'Rely on bash history to see what was typed.', verdict: 'bad', why: 'Shell history is per-user, easy to disable or edit, and doesn’t capture edits made by editors or scripts.' }
+      ] }
+    ]
+  },
+  practice: {
+    intro: 'Install auditd, write rules, trigger an event and find it again.',
+    blocks: [
+      { type: 'terminal', title: 'Auditd from zero to evidence', host: 'student@ubuntu-victim', prompt: '$', motd: 'Ubuntu 22.04 lab VM. You have sudo rights.', tasks: [
+        { goal: 'Install the audit daemon: <code>sudo apt install auditd</code>', match: /^sudo\s+apt(-get)?\s+install\s+(-y\s+)?auditd(\s+audispd-plugins)?(\s+-y)?$/i, hint: 'sudo apt install -y auditd', output: 'Reading package lists... Done\nSetting up auditd (1:3.0.7-1build1) ...\nCreated symlink /etc/systemd/system/multi-user.target.wants/auditd.service' },
+        { goal: 'Enable and start the service now', match: /^sudo\s+systemctl\s+enable\s+--now\s+auditd$/i, hint: 'sudo systemctl enable --now auditd', output: 'Synchronizing state of auditd.service with SysV service script...\n● auditd.service active (running)' },
+        { goal: 'Watch <code>/etc/passwd</code> for writes and attribute changes, key <code>identity</code>', match: /^sudo\s+auditctl\s+-w\s+\/etc\/passwd\s+-p\s+wa\s+-k\s+identity$/i, hint: 'sudo auditctl -w /etc/passwd -p wa -k identity', output: '(rule added)' },
+        { goal: 'Log every program real users execute (64-bit): syscall <code>execve</code>, key <code>user-exec</code>', match: /^sudo\s+auditctl\s+-a\s+always,exit\s+-F\s+arch=b64\s+-S\s+execve\s+-F\s+auid>=1000\s+-F\s+auid!=(unset|4294967295|-1)\s+-k\s+user-exec$/i, hint: 'sudo auditctl -a always,exit -F arch=b64 -S execve -F auid>=1000 -F auid!=unset -k user-exec', output: '(rule added)', note: 'auid>=1000 = human accounts; auid!=unset skips daemons that never logged in.' },
+        { goal: 'List the loaded rules', match: /^sudo\s+auditctl\s+-l$/i, hint: 'sudo auditctl -l', output: '-w /etc/passwd -p wa -k identity\n-a always,exit -F arch=b64 -S execve -F auid>=1000 -F auid!=-1 -F key=user-exec' },
+        { goal: 'Trigger the watch: <code>sudo useradd backdoor</code>', match: /^sudo\s+useradd\s+backdoor$/i, hint: 'sudo useradd backdoor', output: '(user created — /etc/passwd was written)' },
+        { goal: 'Find it, interpreted: <code>sudo ausearch -k identity -i</code>', match: /^sudo\s+ausearch\s+(-k\s+identity\s+-i|-i\s+-k\s+identity)$/i, hint: 'sudo ausearch -k identity -i', output: '----\ntype=PROCTITLE msg=audit(17/11/2026 10:42:07.311:482) : proctitle=useradd backdoor\ntype=PATH msg=audit(...:482) : item=0 name=/etc/passwd inode=1311 nametype=NORMAL\ntype=SYSCALL msg=audit(...:482) : arch=x86_64 syscall=openat success=yes exit=5 auid=student uid=root euid=root tty=pts0 comm=useradd exe=/usr/sbin/useradd key=identity', note: 'uid=root but auid=student — the real person behind sudo.' },
+        { goal: 'Summarise authentication attempts: <code>sudo aureport -au</code>', match: /^sudo\s+aureport\s+(-au|--auth)$/i, hint: 'sudo aureport -au', output: 'Authentication Report\n============================================\n# date time acct host term exe success event\n1. 17/11/26 10:41:55 student ? pts/0 /usr/bin/sudo yes 471\n2. 17/11/26 10:42:07 student ? pts/0 /usr/bin/sudo yes 480' }
+      ], extra: [
+        { match: /^sudo\s+auditctl\s+-s$/i, output: 'enabled 1\nfailure 1\npid 812\nbacklog_limit 8192\nlost 0\nbacklog 0' },
+        { match: /^sudo\s+augenrules\s+--load$/i, output: 'No rules files changed (tip: write rules to /etc/audit/rules.d/ids.rules first).' },
+        { match: /^auditctl/i, output: 'You must be root to run this program.', err: true }
+      ], success: 'You installed auditd, watched an identity file, logged user executions and recovered who really ran <code>useradd</code> — even through sudo. Next step in real life: copy these rules into <code>/etc/audit/rules.d/ids.rules</code> and run <code>augenrules --load</code>.' },
+      { type: 'sort', title: 'Watch rule or syscall rule?', left: 'File watch (-w)', right: 'Syscall rule (-a)', intro: 'Which kind of rule is the natural fit for each requirement?', items: [
+        { text: 'Record any change to <code>/etc/shadow</code>.', answer: 'left', why: 'A single sensitive file → <code>-w /etc/shadow -p wa</code>.' },
+        { text: 'Record every program a human user executes.', answer: 'right', why: 'Execution is the <code>execve</code> syscall, filtered by <code>auid</code>.' },
+        { text: 'Alert when SSH server config is edited.', answer: 'left', why: '<code>-w /etc/ssh/sshd_config -p wa -k sshd</code>.' },
+        { text: 'Detect kernel modules being loaded.', answer: 'right', why: 'Use syscalls such as <code>init_module</code>/<code>finit_module</code> (plus a watch on <code>/sbin/insmod</code> if you like).' },
+        { text: 'Track permission changes (chmod) by users on any file.', answer: 'right', why: '<code>chmod</code>/<code>fchmodat</code> syscalls across the whole filesystem need a syscall rule.' },
+        { text: 'Notice changes to the cron directory.', answer: 'left', why: 'Watch <code>/etc/cron.d/</code> recursively with <code>-p wa</code>.' }
+      ] }
+    ]
+  },
+  playbook: {
+    rules: [
+      ['Key every rule. ', 'A <code>-k</code> key turns a haystack into a one-line <code>ausearch -k</code> query.'],
+      ['Watch identity and privilege files. ', '<code>/etc/passwd</code>, <code>/etc/shadow</code>, <code>/etc/group</code>, <code>/etc/sudoers</code> and <code>/etc/sudoers.d/</code> with <code>-p wa</code>.'],
+      ['Attribute with auid. ', 'Filter on <code>auid&gt;=1000</code> and <code>auid!=unset</code> to focus on humans; report the auid, not just uid.'],
+      ['Persist rules properly. ', 'Rules live in <code>/etc/audit/rules.d/</code>; load with <code>augenrules --load</code>. auditctl alone is temporary.'],
+      ['Lock and ship. ', 'Finish with <code>-e 2</code> and forward logs off the box so an intruder cannot rewrite history.'],
+      ['Mind the volume. ', 'Specify <code>arch=b64</code> (and b32 when needed), scope syscall rules tightly and watch for <code>lost</code> events in <code>auditctl -s</code>.']
+    ],
+    quote: ['Logs you can’t attribute are rumours. Logs an attacker can edit are fiction.']
+  }
+});
+</script>
+</body>
+</html>

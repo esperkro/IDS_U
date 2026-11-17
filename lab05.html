@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lab 05 — IDS Training</title>
+<link rel="stylesheet" href="module-kit.css">
+<script src="labs-access.js"></script>
+<script>LabsAccess.guard('lab05');</script>
+</head>
+<body>
+<div id="app"><noscript><p style="padding:16px">IDS Training needs JavaScript enabled.</p></noscript></div>
+<script src="module-kit.js"></script>
+<script src="questions.js"></script>
+<script src="assessment.js"></script>
+<script>
+ModuleKit.mount({
+  id: 'lab05',
+  briefing: {
+    hook: 'Signatures catch what you already know. Anomaly detection is how you catch the attacker using valid credentials and ordinary tools — the one who doesn’t trip any rule.',
+    lead: 'User anomaly detection compares current behaviour with a baseline and scores how unusual it is. Techniques range from simple <strong>thresholds</strong> and <strong>z-scores</strong> to <strong>peer-group</strong> comparison, <strong>rarity</strong> (“first time seen”), <strong>impossible travel</strong> and machine-learning risk scoring in UEBA products.',
+    stats: [
+      { value: 'z = (x − μ) / σ', label: 'The z-score', note: 'How many standard deviations a value sits from the mean. |z| ≥ 3 is a common starting threshold.' },
+      { value: '≈ 900 km/h', label: 'Airliner cruising speed', note: 'Two logons further apart than a plane could fly in the time between them = “impossible travel”.' },
+      { value: 'Trade-off', label: 'Sensitivity vs. false positives', note: 'Every threshold choice trades missed attacks against analyst workload. There is no free setting.' }
+    ],
+    objectives: [
+      'Calculate and interpret z-scores for user activity.',
+      'Tune a threshold and reason about true/false positives.',
+      'Apply impossible-travel logic and know its pitfalls (VPNs, proxies).',
+      'Choose between threshold, statistical, rarity and peer-group techniques.'
+    ],
+    blocks: [{ type: 'myths', items: [
+      { myth: 'Anomaly detection finds attacks; signatures find noise.', fact: 'Anomaly detection finds <em>unusual</em> things — many are benign. It complements signatures; it doesn’t replace them.' },
+      { myth: 'Impossible travel alerts are always account compromise.', fact: 'Corporate VPNs, cloud proxies and mobile carriers can place a user in two distant cities at once. Enrich with known egress IPs before alerting.' },
+      { myth: 'A lower threshold is always safer.', fact: 'Lower thresholds catch more but bury analysts in false positives — and fatigued analysts miss real attacks.' }
+    ] }]
+  },
+  scenario: {
+    meta: ['Engineering org', 'Cloud SSO logs', 'Insider-risk review'],
+    title: 'The quiet download',
+    story: '<p>Karan, a senior engineer, resigned on Friday. Over the past month his account downloaded on average 40 files a day from the code repository (σ ≈ 8). On Wednesday it downloaded 210. No rule fired: the static rule only alerts above 500 files/day, a number chosen years ago for the busiest build servers.</p>',
+    blocks: [
+      { type: 'choice', title: 'Decision 1 — Why was it missed?', prompt: 'What is the best explanation and fix?', options: [
+        { text: 'A single global static threshold ignores per-user behaviour. Score Karan against his own baseline: z ≈ (210−40)/8 ≈ 21.', verdict: 'good', why: 'Per-entity statistics catch activity that is huge for <em>this user</em> but small for the organisation.' },
+        { text: 'Lower the global threshold to 100 files/day for everyone.', verdict: 'partial', why: 'It would have caught Karan, but build servers and heavy users would alert every day.' },
+        { text: 'Nothing was missed — 210 is well below 500.', verdict: 'bad', why: 'The rule was blind to context. A 21-sigma jump for a departing employee is exactly what insider-risk monitoring exists for.' }
+      ] },
+      { type: 'choice', title: 'Decision 2 — Making the alert useful', prompt: 'How do you turn this anomaly into a high-quality alert?', options: [
+        { text: 'Combine signals into a risk score: volume z-score + HR “leaver” flag + new destination, and route to the insider-risk process.', verdict: 'good', why: 'Several weak signals together are far more reliable than one, and the right team handles it with HR and legal involvement.' },
+        { text: 'Immediately disable the account and announce the incident to the team.', verdict: 'bad', why: 'Premature, disproportionate and potentially unlawful. Investigate quietly under policy first.' },
+        { text: 'Email Karan to ask why he downloaded so much.', verdict: 'partial', why: 'Asking may be reasonable later, but alerting the subject first can lead to evidence being destroyed.' }
+      ] }
+    ]
+  },
+  practice: {
+    intro: 'Tune a z-score detector, then check two logons for impossible travel.',
+    blocks: [
+      { type: 'custom', title: 'Z-score tuner: daily file downloads (30 days)', tag: 'Simulator', intro: 'Days 12 and 26 are confirmed incidents (marked ★). Move the threshold and watch true positives, false positives and misses change.', render: function (host, K) {
+        var v = [38,42,35,47,40,44,52,39,36,61,41,88,43,37,45,40,58,33,39,46,42,41,64,38,44,79,36,40,43,39];
+        var bad = { 11: 1, 25: 1 };
+        var mu = K.mean(v), sd = K.std(v);
+        var chart = K.el('div');
+        var slider = K.el('input', { type: 'range', min: '1', max: '4', step: '0.1', value: '3', id: 'zk' });
+        var lab = K.el('label', { for: 'zk' });
+        var metrics = K.el('div', { class: 'metric-grid', 'aria-live': 'polite' });
+        function draw() {
+          var k = +slider.value, thr = mu + k * sd;
+          lab.textContent = 'Threshold: |z| ≥ ' + k.toFixed(1) + ' (≈ ' + Math.round(thr) + ' downloads)';
+          var tp = 0, fp = 0, fn = 0;
+          v.forEach(function (x, i) { var flag = (x - mu) / sd >= k; if (flag && bad[i]) tp++; else if (flag) fp++; else if (bad[i]) fn++; });
+          chart.innerHTML = K.lineChart({ values: v, min: 0, max: 100, label: 'Daily downloads with threshold line', lines: [{ y: mu, label: 'mean ' + mu.toFixed(1), color: '#b2bdd8', dash: true }, { y: thr, label: 'threshold', color: '#f9a8d4' }],
+            highlight: function (x, i) { var f = (x - mu) / sd >= k; return f ? (bad[i] ? '#4ade80' : '#f87171') : (bad[i] ? '#fbbf24' : null); },
+            labels: v.map(function (_, i) { return bad[i] ? '★' : ((i + 1) % 5 === 0 ? String(i + 1) : ''); }) });
+          metrics.innerHTML = '';
+          [['True positives', tp + ' / 2'], ['False positives', fp], ['Missed', fn], ['Mean / σ', mu.toFixed(1) + ' / ' + sd.toFixed(1)]].forEach(function (m) {
+            metrics.appendChild(K.el('div', { class: 'metric' }, [K.el('b', { text: String(m[1]) }), K.el('span', { text: m[0] })]));
+          });
+        }
+        slider.addEventListener('input', draw);
+        host.appendChild(chart);
+        host.appendChild(K.el('div', { class: 'legend', html: '<span><i style="background:#4ade80"></i>caught incident</span><span><i style="background:#f87171"></i>false positive</span><span><i style="background:#fbbf24"></i>missed incident</span>' }));
+        host.appendChild(K.el('div', { class: 'field', style: 'margin-top:10px' }, [lab, slider]));
+        host.appendChild(metrics);
+        host.appendChild(K.el('p', { class: 'small muted', style: 'margin-top:10px', html: 'Try 1.5, 2.0 and 3.0. Notice that the 79-download incident needs a lower threshold than the 88 one — and that lowering it starts catching ordinary busy days. That is the trade-off you will tune in every detection.' }));
+        draw();
+      } },
+      { type: 'custom', title: 'Impossible travel check', tag: 'Calculator', intro: 'Pick two consecutive logons for the same account. The calculator uses great-circle distance and compares the required speed with ~900 km/h.', render: function (host, K) {
+        var cities = { Pune: [18.52, 73.86], Delhi: [28.61, 77.21], Singapore: [1.35, 103.82], Frankfurt: [50.11, 8.68], London: [51.51, -0.13], 'New York': [40.71, -74.01] };
+        function hav(a, b) { var R = 6371, r = Math.PI / 180, dLa = (b[0] - a[0]) * r, dLo = (b[1] - a[1]) * r; var h = Math.sin(dLa / 2) * Math.sin(dLa / 2) + Math.cos(a[0] * r) * Math.cos(b[0] * r) * Math.sin(dLo / 2) * Math.sin(dLo / 2); return 2 * R * Math.asin(Math.sqrt(h)); }
+        function sel(id, def) { var s = K.el('select', { id: id }); Object.keys(cities).forEach(function (c) { s.appendChild(K.el('option', { value: c, text: c, selected: c === def })); }); return s; }
+        var a = sel('it-a', 'Pune'), b = sel('it-b', 'Frankfurt');
+        var mins = K.el('input', { type: 'number', id: 'it-m', min: '1', max: '2880', value: '45' });
+        var vpn = K.el('button', { type: 'button', class: 'toggle', 'aria-pressed': 'false', text: 'Second IP belongs to corporate VPN egress (Frankfurt)' });
+        var fb = K.el('div', { class: 'feedback', 'aria-live': 'polite' });
+        function calc() {
+          var d = hav(cities[a.value], cities[b.value]), m = Math.max(1, +mins.value || 1), sp = d / (m / 60);
+          var isVpn = vpn.getAttribute('aria-pressed') === 'true' && b.value === 'Frankfurt';
+          var txt = 'Distance ≈ <strong>' + Math.round(d).toLocaleString() + ' km</strong> in ' + m + ' min → required speed ≈ <strong>' + Math.round(sp).toLocaleString() + ' km/h</strong>.';
+          if (d < 1) K.setFeedback(fb, 'good', txt + ' Same city — no travel needed.', 'Plausible');
+          else if (sp <= 900) K.setFeedback(fb, 'good', txt + ' A flight could cover this; consider other context.', 'Physically possible');
+          else if (isVpn) K.setFeedback(fb, 'partial', txt + ' Impossible physically, but the second IP is your own VPN egress. Suppress or lower severity via an allow-list of known egress IPs.', 'Likely benign — VPN');
+          else K.setFeedback(fb, 'bad', txt + ' No one can travel that fast. Treat as possible credential compromise: check MFA, device and session details.', 'Impossible travel');
+        }
+        [a, b, mins].forEach(function (x) { x.addEventListener('input', calc); x.addEventListener('change', calc); });
+        vpn.addEventListener('click', function () { vpn.setAttribute('aria-pressed', String(vpn.getAttribute('aria-pressed') !== 'true')); calc(); });
+        host.appendChild(K.el('div', { class: 'sim-grid two' }, [
+          K.el('div', { class: 'field' }, [K.el('label', { for: 'it-a', text: 'Logon 1 location' }), a]),
+          K.el('div', { class: 'field' }, [K.el('label', { for: 'it-b', text: 'Logon 2 location' }), b]),
+          K.el('div', { class: 'field' }, [K.el('label', { for: 'it-m', text: 'Minutes between logons' }), mins])
+        ]));
+        host.appendChild(K.el('div', { class: 'pill-row', style: 'margin-top:10px' }, [vpn]));
+        host.appendChild(fb);
+        calc();
+      } }
+    ]
+  },
+  playbook: {
+    rules: [
+      ['Score per entity. ', 'Compare each user with their own history and their peers, not with one global number.'],
+      ['Start simple. ', 'Thresholds, z-scores and “first seen” rules are explainable and often catch more than you expect.'],
+      ['Stack weak signals. ', 'Combine volume, time, location, device and HR context into a risk score before alerting.'],
+      ['Enrich before you alert. ', 'Known VPN egress, travel calendars and service accounts remove many false positives.'],
+      ['Measure the trade-off. ', 'Track true positives, false positives and misses for every threshold change.'],
+      ['Keep humans in the loop. ', 'An anomaly is a question for an analyst, not an automatic accusation.']
+    ],
+    quote: ['Unusual is not the same as malicious — but malicious is almost always unusual for someone.']
+  }
+});
+</script>
+</body>
+</html>

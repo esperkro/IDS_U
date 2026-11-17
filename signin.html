@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in — IDS Training</title>
+<meta name="description" content="IDS Training: interactive intrusion detection labs. Create a local profile to begin.">
+<link rel="stylesheet" href="module-kit.css">
+<script src="labs-access.js"></script>
+</head>
+<body>
+<main class="signin" id="main">
+  <div class="card stack">
+    <div style="display:flex;align-items:center;gap:12px">
+      <span class="lab-icon" style="width:52px;height:52px;border-radius:14px;display:grid;place-items:center;background:#16314a;color:#7dd3fc" id="logo"></span>
+      <div>
+        <h1 style="margin:0;font-size:1.6rem">IDS Training</h1>
+        <p class="muted small" style="margin:0">20 hands-on intrusion detection labs</p>
+      </div>
+    </div>
+    <p>Create a local profile to track your progress, badges and recovered access codes. Nothing leaves this browser — there is no server and no account.</p>
+    <form id="signin-form" class="stack" novalidate>
+      <div class="field">
+        <label for="name">Your name</label>
+        <input type="text" id="name" name="name" maxlength="40" autocomplete="name" required aria-describedby="name-err">
+        <small id="name-err" class="status-bad" aria-live="polite"></small>
+      </div>
+      <div class="field">
+        <label for="cohort">Class or cohort <span class="muted">(optional)</span></label>
+        <input type="text" id="cohort" name="cohort" maxlength="40" autocomplete="off">
+      </div>
+      <button class="btn btn-primary" type="submit" style="width:100%">Start training →</button>
+    </form>
+    <div id="existing" hidden>
+      <h2 style="font-size:1rem;margin-top:8px">Profiles on this device</h2>
+      <div class="btn-row" id="profile-list"></div>
+    </div>
+    <p class="small muted">Progress is saved in this browser’s localStorage. Clearing site data removes it.</p>
+  </div>
+</main>
+<script>
+(function () {
+  var LA = window.LabsAccess;
+  document.getElementById('logo').innerHTML = LA.iconSVG('radar', 30);
+  var form = document.getElementById('signin-form');
+  var name = document.getElementById('name');
+  var cohort = document.getElementById('cohort');
+  var err = document.getElementById('name-err');
+  form.addEventListener('submit', function (e) {
+    e.preventDefault();
+    if (!name.value.trim()) { err.textContent = 'Please enter your name.'; name.setAttribute('aria-invalid', 'true'); name.focus(); return; }
+    if (!LA.signIn(name.value, cohort.value)) { err.textContent = 'Could not save your profile. Is browser storage blocked?'; return; }
+    location.href = 'index.html';
+  });
+  var profiles = LA.listProfiles();
+  if (profiles.length) {
+    document.getElementById('existing').hidden = false;
+    var list = document.getElementById('profile-list');
+    profiles.forEach(function (p) {
+      var b = document.createElement('button');
+      b.type = 'button'; b.className = 'btn btn-sm';
+      b.textContent = 'Continue as ' + p.name + (p.cohort ? ' (' + p.cohort + ')' : '');
+      b.addEventListener('click', function () { LA.signIn(p.name); location.href = 'index.html'; });
+      list.appendChild(b);
+    });
+  }
+})();
+</script>
+</body>
+</html>

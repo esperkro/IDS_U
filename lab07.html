@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lab 07 — IDS Training</title>
+<link rel="stylesheet" href="module-kit.css">
+<script src="labs-access.js"></script>
+<script>LabsAccess.guard('lab07');</script>
+</head>
+<body>
+<div id="app"><noscript><p style="padding:16px">IDS Training needs JavaScript enabled.</p></noscript></div>
+<script src="module-kit.js"></script>
+<script src="questions.js"></script>
+<script src="assessment.js"></script>
+<script>
+ModuleKit.mount({
+  id: 'lab07',
+  briefing: {
+    hook: 'Incidents don’t wait for you to find the procedure. The teams that respond well are the ones who rehearsed it on a quiet Tuesday.',
+    lead: 'NIST SP 800-61 has long described incident handling as a life cycle: <strong>Preparation</strong>; <strong>Detection &amp; Analysis</strong>; <strong>Containment, Eradication &amp; Recovery</strong>; and <strong>Post-Incident Activity</strong>. Revision 3 (2025) maps these activities onto the NIST Cybersecurity Framework 2.0 functions, but the practical flow you will drill here is the same.',
+    stats: [
+      { value: '4', label: 'Classic life-cycle phases', note: 'Prepare → Detect &amp; Analyse → Contain, Eradicate &amp; Recover → Post-Incident. Teams loop back as they learn more.' },
+      { value: 'Evidence', label: 'Before you wipe', note: 'Preserve logs and volatile data before destructive containment, or you may never learn how the attacker got in.' },
+      { value: 'Lessons', label: 'The most skipped phase', note: 'A blameless review that updates detections and runbooks is how the next incident gets shorter.' }
+    ],
+    objectives: [
+      'Walk a compromised-account incident through the IR life cycle.',
+      'Choose containment actions that stop harm without destroying evidence.',
+      'Find common persistence left behind in cloud and email accounts.',
+      'Run a useful post-incident review.'
+    ],
+    blocks: [{ type: 'myths', items: [
+      { myth: 'Step one is always to unplug or wipe the machine.', fact: 'Rushed destructive actions destroy volatile evidence and tip off the attacker. Contain proportionately and preserve evidence first where you can.' },
+      { myth: 'Resetting the password ends an account compromise.', fact: 'Active sessions, tokens, OAuth grants, added MFA methods and mailbox rules can all survive a reset. Revoke and inspect them too.' },
+      { myth: 'Lessons-learned meetings are about finding who to blame.', fact: 'Blameless reviews surface the process and control gaps that let the incident happen — blame just makes people hide mistakes.' }
+    ] }]
+  },
+  scenario: {
+    meta: ['Microsoft 365 tenant', 'Finance mailbox', 'Thursday 14:05'],
+    title: 'The invoice that changed bank details',
+    story: '<p>A supplier phones the accounts team: they never received last week’s payment. The invoice email from “them” asked to pay into a new bank account. Meanwhile an alert fires for <code>j.doe@company.example</code>: a sign-in from an unfamiliar country, followed by a new inbox rule that moves any email containing “invoice” or “payment” to the RSS Feeds folder.</p><p>This is a classic business email compromise (BEC). You are the incident handler.</p>',
+    blocks: [
+      { type: 'choice', title: 'Decision 1 — The first ten minutes', prompt: 'What is the best opening move?', options: [
+        { text: 'Open an incident record, confirm with sign-in and audit logs, and notify the incident lead and finance to hold pending payments.', verdict: 'good', why: 'You verify quickly, establish a record and timeline, and limit financial harm while you investigate.' },
+        { text: 'Delete j.doe’s account so the attacker can’t use it.', verdict: 'bad', why: 'Deleting the account destroys mailbox and audit evidence and disrupts the business — revoke access instead.' },
+        { text: 'Reset j.doe’s password and close the alert.', verdict: 'partial', why: 'A useful containment step, but alone it leaves sessions, rules and other compromised accounts untouched — and nothing is documented.' }
+      ] }
+    ]
+  },
+  practice: {
+    intro: 'Run the incident against the clock. Each stage has one best action. You can turn the timer off if you need more time — the learning is in the choices.',
+    blocks: [
+      { type: 'custom', title: 'Incident drill: BEC on j.doe', tag: 'Timed drill', render: function (host, K) {
+        var stages = [
+          { phase: 'Detection & Analysis', text: 'Sign-in logs confirm a successful login with MFA approved from an unfamiliar ASN, 20 minutes after a phishing email was opened. What next?', opts: [
+            ['Search sign-in logs for the same IP/ASN across all users to scope the incident.', 3, 'Scoping first tells you whether this is one account or ten.'],
+            ['Assume it is only j.doe and move straight to recovery.', 0, 'Phishing campaigns rarely target one person. You may miss other victims.'],
+            ['Email all staff that the company has been hacked.', 1, 'Communication matters, but uncontrolled announcements cause panic and tip off the attacker.']] },
+          { phase: 'Containment', text: 'Two accounts are affected: j.doe and m.khan. How do you contain?', opts: [
+            ['Revoke sessions/refresh tokens, reset passwords, re-register MFA, block the IPs, and remove the malicious inbox rules (after exporting them).', 3, 'Cuts off the attacker’s access paths while preserving evidence of what they set up.'],
+            ['Wipe and reimage both users’ laptops immediately.', 1, 'The compromise is in the cloud account; wiping laptops destroys evidence and doesn’t revoke tokens.'],
+            ['Disable the two accounts permanently and delete their mailboxes.', 0, 'Destroys evidence and halts business. Containment should be reversible.']] },
+          { phase: 'Evidence', text: 'What do you preserve?', opts: [
+            ['Export sign-in, unified audit and mailbox audit logs, message trace and the phishing email with headers; record hashes and who handled what.', 3, 'These show how access happened and what was done, with integrity and chain of custody.'],
+            ['Screenshots of the inbox rule only.', 1, 'Some evidence, but incomplete and hard to verify.'],
+            ['Nothing — the logs will still be there next month.', 0, 'Cloud logs have retention limits; some default retention windows are short.']] },
+          { phase: 'Eradication & Recovery', text: 'Passwords are reset. What else must you check before declaring the accounts clean?', opts: [
+            ['OAuth app consents, newly added MFA methods, forwarding rules, mailbox delegates and app passwords.', 3, 'These are common persistence mechanisms that survive a password reset.'],
+            ['Run an antivirus scan on the users’ laptops.', 1, 'Worth doing for the phishing payload, but it won’t find cloud-side persistence.'],
+            ['Nothing more — the password reset removed the attacker.', 0, 'Tokens and consented apps can keep working after a reset.']] },
+          { phase: 'Post-Incident Activity', text: 'The incident is closed. What happens next?', opts: [
+            ['Blameless review within two weeks: timeline, root cause, what worked, new detections (inbox-rule alert), and payment-change verification by phone.', 3, 'Turns this incident into better controls and faster future response.'],
+            ['Formally discipline j.doe for clicking the link.', 0, 'Blame discourages reporting; the control gaps remain.'],
+            ['File the ticket and move on — everyone is busy.', 1, 'The same attack will work again next quarter.']] }
+        ];
+        var i = 0, score = 0, timeLeft = 150, timerOn = true, iv = null, finished = false;
+        var head = K.el('div', { class: 'btn-row', style: 'justify-content:space-between' });
+        var clock = K.el('span', { class: 'chip chip-accent', 'aria-live': 'off', id: 'ir-clock' });
+        var toggle = K.el('button', { type: 'button', class: 'btn btn-sm', text: 'Turn timer off' });
+        var stageBox = K.el('div', { style: 'margin-top:12px' });
+        var fb = K.el('div', { class: 'feedback', role: 'status', 'aria-live': 'polite' });
+        var startBtn = K.el('button', { type: 'button', class: 'btn btn-primary', id: 'ir-start', text: 'Start the drill' });
+        head.appendChild(clock); head.appendChild(toggle);
+        host.appendChild(head); host.appendChild(stageBox); host.appendChild(fb);
+        stageBox.appendChild(K.el('p', { text: 'You have 2½ minutes for five stages. Score up to 15 points.' }));
+        stageBox.appendChild(startBtn);
+        function fmt(s) { return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }
+        function tick() { clock.textContent = timerOn ? '⏱ ' + fmt(timeLeft) : '⏱ timer off'; }
+        tick();
+        toggle.addEventListener('click', function () { timerOn = !timerOn; toggle.textContent = timerOn ? 'Turn timer off' : 'Turn timer on'; tick(); });
+        startBtn.addEventListener('click', function () {
+          iv = setInterval(function () { if (!timerOn || finished) return; timeLeft--; tick(); if (timeLeft <= 0) end(true); }, 1000);
+          show();
+        });
+        function show() {
+          var s = stages[i];
+          stageBox.innerHTML = '';
+          stageBox.appendChild(K.el('p', { class: 'small muted', text: 'Stage ' + (i + 1) + ' of ' + stages.length + ' · ' + s.phase }));
+          stageBox.appendChild(K.el('p', { html: '<strong>' + s.text + '</strong>' }));
+          var list = K.el('div', { class: 'choice-list' });
+          K.shuffle(s.opts).forEach(function (o, j) {
+            var b = K.el('button', { type: 'button', class: 'choice-btn' }, [K.el('span', { class: 'letter', text: String.fromCharCode(65 + j) }), K.el('span', { text: o[0] })]);
+            b.addEventListener('click', function () {
+              if (finished) return;
+              score += o[1];
+              K.$$('button', list).forEach(function (x) { x.disabled = true; });
+              b.className = 'choice-btn ' + (o[1] === 3 ? 'is-good' : o[1] === 1 ? 'is-partial' : 'is-bad');
+              K.setFeedback(fb, o[1] === 3 ? 'good' : o[1] === 1 ? 'partial' : 'bad', o[2] + ' <em>(+' + o[1] + ')</em>');
+              var nx = K.el('button', { type: 'button', class: 'btn btn-primary', style: 'margin-top:10px', text: i < stages.length - 1 ? 'Next stage →' : 'Finish drill' });
+              nx.addEventListener('click', function () { fb.className = 'feedback'; fb.innerHTML = ''; i++; if (i < stages.length) show(); else end(false); });
+              stageBox.appendChild(nx); nx.focus();
+            });
+            list.appendChild(b);
+          });
+          stageBox.appendChild(list);
+        }
+        function end(timeout) {
+          finished = true; clearInterval(iv);
+          stageBox.innerHTML = '';
+          var v = score >= 13 ? 'good' : score >= 8 ? 'partial' : 'bad';
+          K.setFeedback(fb, v, '<p>Score: <strong>' + score + ' / 15</strong>' + (timeout ? ' — time ran out at stage ' + (i + 1) + '.' : '.') + '</p><p>Strong responders verify, scope, contain reversibly, preserve evidence, hunt for persistence and close the loop with a blameless review.</p>', timeout ? 'Time’s up' : 'Drill complete');
+          var again = K.el('button', { type: 'button', class: 'btn', text: 'Run the drill again' });
+          again.addEventListener('click', function () { i = 0; score = 0; timeLeft = 150; finished = false; fb.className = 'feedback'; fb.innerHTML = ''; tick(); iv = setInterval(function () { if (!timerOn || finished) return; timeLeft--; tick(); if (timeLeft <= 0) end(true); }, 1000); show(); });
+          stageBox.appendChild(again);
+        }
+      } },
+      { type: 'sort', title: 'Containment or eradication & recovery?', left: 'Containment', right: 'Eradication & recovery', intro: 'Classify each action by the stage it mainly belongs to.', items: [
+        { text: 'Revoke the attacker’s active sessions and tokens.', answer: 'left', why: 'Stops ongoing access — containment.' },
+        { text: 'Block the attacker’s IP addresses at the identity provider.', answer: 'left', why: 'Limits further access while you investigate.' },
+        { text: 'Remove a malicious OAuth application from the tenant.', answer: 'right', why: 'Removing the attacker’s foothold is eradication.' },
+        { text: 'Restore deleted emails and verify payment details with suppliers.', answer: 'right', why: 'Returning the business to normal operation is recovery.' },
+        { text: 'Isolate an infected laptop from the network with EDR.', answer: 'left', why: 'Network isolation prevents spread — classic containment.' },
+        { text: 'Enforce phishing-resistant MFA for the finance team.', answer: 'right', why: 'Hardening to prevent re-compromise is part of recovery.' }
+      ] }
+    ]
+  },
+  playbook: {
+    rules: [
+      ['Prepare before it happens. ', 'Contacts, runbooks, log retention, access to tools and a tested communication plan.'],
+      ['Verify and scope. ', 'Confirm the alert, then search for the same indicators across every user and host.'],
+      ['Contain reversibly. ', 'Revoke sessions, reset credentials, block indicators — avoid deletion and wiping until evidence is safe.'],
+      ['Preserve evidence with integrity. ', 'Export logs, record hashes and timestamps, and keep a chain-of-custody note.'],
+      ['Hunt for persistence. ', 'Inbox rules, forwarding, OAuth consents, new MFA methods, scheduled tasks and new accounts.'],
+      ['Close the loop. ', 'Blameless review, new detections and updated runbooks — then re-drill.']
+    ],
+    quote: ['Contain fast, destroy nothing, write everything down.']
+  }
+});
+</script>
+</body>
+</html>

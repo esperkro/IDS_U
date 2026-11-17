@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lab 10 — IDS Training</title>
+<link rel="stylesheet" href="module-kit.css">
+<script src="labs-access.js"></script>
+<script>LabsAccess.guard('lab10');</script>
+</head>
+<body>
+<div id="app"><noscript><p style="padding:16px">IDS Training needs JavaScript enabled.</p></noscript></div>
+<script src="module-kit.js"></script>
+<script src="questions.js"></script>
+<script src="assessment.js"></script>
+<script>
+ModuleKit.mount({
+  id: 'lab10',
+  briefing: {
+    hook: 'Nine labs of building blocks. Now put them together: a lab network, audit trails on Linux and Windows, a baseline, alerts — and an intruder who thinks nobody is watching.',
+    lead: 'Your final project is a complete <strong>user intrusion detection</strong> exercise. You will plan the deliverables, follow an attacker across auditd and Windows Security logs, rebuild the timeline and write up what happened and how your detections performed.',
+    stats: [
+      { value: '2 OS', label: 'Linux + Windows evidence', note: 'Real intrusions cross platforms — your detections and your timeline must too.' },
+      { value: '1', label: 'Timeline to rule them all', note: 'Correlating events in time order is the core skill of investigation.' },
+      { value: '5', label: 'Project deliverables', note: 'Lab design, audit configuration, baseline &amp; detections, incident report, evaluation &amp; lessons learned.' }
+    ],
+    objectives: [
+      'Plan an end-to-end user IDS project with clear deliverables.',
+      'Correlate Linux and Windows audit evidence into one timeline.',
+      'Map evidence to detections and identify detection gaps.',
+      'Write conclusions supported by evidence.'
+    ],
+    blocks: [{ type: 'myths', items: [
+      { myth: 'The final report should show that everything worked.', fact: 'The most valuable part of a project report is often what <em>didn’t</em> work: missed detections and why.' },
+      { myth: 'A timeline is just the logs sorted by time.', fact: 'Sorting is the start. A timeline links events across systems, notes time zones and clock drift, and explains cause and effect.' },
+      { myth: 'More tools make a better project.', fact: 'A small, well-configured and well-documented stack beats a sprawling one you can’t explain.' }
+    ] }]
+  },
+  scenario: {
+    meta: ['Your lab network', 'Kali → Ubuntu → Windows', 'Capstone exercise'],
+    title: 'Operation Night Shift',
+    story: '<p>Your instructor plays the intruder in your isolated lab. Overnight, someone logs into the Ubuntu server as <code>dev1</code> with a guessed password, uses <code>sudo</code> to add a new user and copies a script to the Windows victim, where an RDP logon follows and a scheduled task appears. Your auditd rules, Windows audit policy and alert rules from earlier labs were running the whole time.</p>',
+    blocks: [
+      { type: 'choice', title: 'Decision — Where do you start?', prompt: 'You arrive in the morning with three alerts. What is your first step?', options: [
+        { text: 'Preserve the logs from both VMs and the alert history, then build a single UTC timeline before drawing conclusions.', verdict: 'good', why: 'Evidence first, then structure. A unified timeline stops you chasing alerts in the wrong order.' },
+        { text: 'Restore both VMs from snapshots to remove the intruder.', verdict: 'bad', why: 'The snapshots would wipe the very evidence your project is meant to analyse.' },
+        { text: 'Investigate the highest-severity alert on its own.', verdict: 'partial', why: 'Reasonable triage instinct, but without the wider timeline you may miss how the attacker got in.' }
+      ] }
+    ]
+  },
+  practice: {
+    intro: 'Rebuild the attack timeline, then check your project plan.',
+    blocks: [
+      { type: 'custom', title: 'Timeline builder', tag: 'Investigation', intro: 'Put the evidence in chronological attack order using the ↑ and ↓ buttons, then check.', render: function (host, K) {
+        var ev = [
+          'Ubuntu auth.log: 14 failed SSH passwords for <code>dev1</code> from 10.10.10.5',
+          'Ubuntu auth.log: Accepted password for <code>dev1</code> from 10.10.10.5',
+          'auditd key=user-exec: <code>sudo useradd -m helper</code> (auid=dev1)',
+          'auditd key=identity: write to <code>/etc/passwd</code> by useradd (auid=dev1)',
+          'auditd key=user-exec: <code>scp tools.ps1 student@10.10.10.30:</code> (auid=dev1)',
+          'Windows 4624: Logon type 10 (RDP) <code>student</code> from 10.10.10.20',
+          'Windows 4688: <code>schtasks /create /tn Updater /tr C:\\Users\\Public\\tools.ps1</code>',
+          'Windows 4698: A scheduled task was created — “Updater”'
+        ];
+        var order = K.shuffle(ev.map(function (_, i) { return i; }));
+        var list = K.el('ol', { class: 'tasks' });
+        var fb = K.el('div', { class: 'feedback', 'aria-live': 'polite' });
+        function render(focusIdx, dir) {
+          list.innerHTML = '';
+          order.forEach(function (e, pos) {
+            var up = K.el('button', { type: 'button', class: 'btn btn-sm', 'aria-label': 'Move up', text: '↑', disabled: pos === 0 });
+            var dn = K.el('button', { type: 'button', class: 'btn btn-sm', 'aria-label': 'Move down', text: '↓', disabled: pos === order.length - 1 });
+            up.addEventListener('click', function () { swap(pos, pos - 1); render(pos - 1, 'up'); });
+            dn.addEventListener('click', function () { swap(pos, pos + 1); render(pos + 1, 'down'); });
+            var li = K.el('li', {}, [K.el('span', { class: 'tick', text: String(pos + 1) }), K.el('span', { style: 'flex:1;min-width:0', html: ev[e] }), K.el('span', { class: 'btn-row', style: 'flex:none;gap:4px' }, [up, dn])]);
+            li.style.alignItems = 'center';
+            list.appendChild(li);
+          });
+          if (focusIdx != null) { var b = list.children[focusIdx].querySelectorAll('button')[dir === 'up' ? 0 : 1]; if (b && !b.disabled) b.focus(); else list.children[focusIdx].querySelector('button:not([disabled])').focus(); }
+        }
+        function swap(a, b) { var t = order[a]; order[a] = order[b]; order[b] = t; }
+        var check = K.el('button', { type: 'button', class: 'btn btn-primary', style: 'margin-top:12px', text: 'Check timeline' });
+        check.addEventListener('click', function () {
+          var right = order.filter(function (e, i) { return e === i; }).length;
+          if (right === ev.length) K.setFeedback(fb, 'good', 'Initial access by SSH brute force → valid login → privilege use to create a backdoor user → lateral tool transfer → RDP to Windows → persistence via scheduled task. Each step maps to a detection you built.', 'Timeline correct');
+          else K.setFeedback(fb, right >= 5 ? 'partial' : 'bad', right + ' of ' + ev.length + ' events are in the right position. Think: how did they get in, what did they do with privilege, how did they move, how did they stay?', 'Keep going');
+        });
+        render();
+        host.appendChild(list); host.appendChild(check); host.appendChild(fb);
+      } },
+      { type: 'redflags', title: 'Which events were missed by your alerts?', intro: 'Your alert rules fired on three things. Tap the evidence lines that <strong>no alert</strong> covered — these are your detection gaps to report.', header: 'detection-coverage.txt', dark: true, mono: true, items: [
+        { text: '[ALERTED] SSH brute force: ≥10 failures in 5 min for one source', flag: false, why: 'Covered by your Lab 06 threshold rule.' },
+        { text: '[no alert] Successful SSH login after the brute force', flag: true, why: 'Gap: “success after failures” from the same source should be high severity.' },
+        { text: '[ALERTED] auditd identity key: /etc/passwd written', flag: false, why: 'Covered by your Lab 02 watch rule.' },
+        { text: '[no alert] scp of a .ps1 file from the Linux server to a workstation', flag: true, why: 'Gap: server-to-workstation file transfer is unusual against the baseline — consider a rarity rule.' },
+        { text: '[no alert] RDP logon (type 10) from a Linux server IP', flag: true, why: 'Gap: RDP from a server that never initiates RDP is a strong lateral-movement signal.' },
+        { text: '[ALERTED] 4698 scheduled task created by non-admin workflow', flag: false, why: 'Covered by your Windows persistence rule.' }
+      ] },
+      { type: 'checklist', title: 'Final project deliverables', tag: 'Plan', scoreLabel: 'Project completeness', items: [
+        { text: 'Lab design diagram with network modes and snapshots', weight: 2, why: 'Shows the environment is isolated and reproducible.' },
+        { text: 'auditd rules file and Windows audit policy export (<code>auditpol /backup</code>)', weight: 2, why: 'Exact configuration as evidence.' },
+        { text: 'Baseline description and alert rules with thresholds', weight: 2, why: 'Explains what “normal” was and what you alerted on.' },
+        { text: 'Incident report with UTC timeline and evidence references', weight: 2, why: 'The heart of the project.' },
+        { text: 'Detection coverage: hits, misses, false positives and fixes', weight: 2, why: 'Honest evaluation is where the learning shows.' },
+        { text: 'Lessons learned and next improvements', weight: 1, why: 'Closes the loop like a real post-incident review.' },
+        { text: 'Run the attack against the campus network for realism', weight: -4, why: 'Never. Attacks stay inside your isolated lab — anything else may be illegal and breaches policy.' }
+      ] }
+    ]
+  },
+  playbook: {
+    rules: [
+      ['Evidence before action. ', 'Preserve logs and alert history before restoring or cleaning anything.'],
+      ['One timeline, one clock. ', 'Normalise to UTC and note clock drift between systems.'],
+      ['Follow the attacker’s path. ', 'Initial access → privilege → lateral movement → persistence → objective.'],
+      ['Map evidence to detections. ', 'For every step: did an alert fire? If not, why not, and what would catch it?'],
+      ['Report gaps honestly. ', 'Misses and false positives are findings, not failures.'],
+      ['Stay inside the lab. ', 'Every attack in this course is performed only on systems you own and are authorised to test.']
+    ],
+    quote: ['Detection isn’t a product you install. It’s a loop: configure, observe, investigate, improve.']
+  }
+});
+</script>
+</body>
+</html>

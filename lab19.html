@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lab 19 — IDS Training</title>
+<link rel="stylesheet" href="module-kit.css">
+<script src="labs-access.js"></script>
+<script>LabsAccess.guard('lab19');</script>
+</head>
+<body>
+<div id="app"><noscript><p style="padding:16px">IDS Training needs JavaScript enabled.</p></noscript></div>
+<script src="module-kit.js"></script>
+<script src="questions.js"></script>
+<script src="assessment.js"></script>
+<script>
+ModuleKit.mount({
+  id: 'lab19',
+  briefing: {
+    hook: 'Labels are expensive and attackers don’t announce themselves. Unsupervised methods find structure in unlabelled data — and the things that don’t fit it.',
+    lead: '<strong>Clustering</strong> groups similar records (hosts, sessions, flows) without labels; records far from every cluster, or in tiny clusters, are candidate anomalies. <strong>k-means</strong> is the classic algorithm; <strong>DBSCAN</strong> explicitly labels low-density points as noise. <strong>Association rule mining</strong> (e.g. Apriori) finds events that occur together, measured by <strong>support</strong>, <strong>confidence</strong> and <strong>lift</strong>.',
+    stats: [
+      { value: 'k', label: 'k-means needs k', note: 'You choose the number of clusters; methods like the elbow curve or silhouette score help.' },
+      { value: 'Noise', label: 'DBSCAN’s outliers', note: 'Points without enough neighbours within ε are labelled noise (−1) — a natural anomaly signal.' },
+      { value: 'Lift &gt; 1', label: 'A real association', note: 'Lift = confidence ÷ support of the consequent. Above 1 means the items co-occur more than chance.' }
+    ],
+    objectives: [
+      'Run k-means step by step and interpret clusters.',
+      'Use distance from centroids or DBSCAN noise to flag anomalies.',
+      'Compute support, confidence and lift for an association rule.',
+      'Know why feature scaling matters for distance-based methods.'
+    ],
+    blocks: [{ type: 'myths', items: [
+      { myth: 'Every cluster k-means finds is meaningful.', fact: 'k-means always returns k clusters, even in random data. You have to interpret and validate them.' },
+      { myth: 'Features can be used in their raw units.', fact: 'Bytes (millions) would swamp connection counts (tens) in a distance calculation. Scale features first, e.g. standardise.' },
+      { myth: 'High confidence means a rule is interesting.', fact: 'If the consequent is common anyway, confidence is high by default. Lift tells you whether the antecedent actually changes the odds.' }
+    ] }]
+  },
+  scenario: {
+    meta: ['University network', '2,000 hosts', 'No labels'],
+    title: 'The host in no group',
+    story: '<p>You cluster one week of per-host features (connections/hour, average bytes per connection, distinct destinations) for 2,000 campus hosts. Three clear clusters appear: student laptops, lab PCs and servers. One printer sits far from every centroid: it contacts 300 distinct external IPs a day.</p>',
+    blocks: [
+      { type: 'choice', title: 'Decision — What do you do with the outlier?', prompt: 'How should you treat the printer?', options: [
+        { text: 'Investigate it as a lead: check what it connects to and why. Outliers are candidates, not verdicts.', verdict: 'good', why: 'A printer talking to hundreds of external IPs could be compromised (printers are often unpatched) — or a misconfigured cloud print service. Evidence decides.' },
+        { text: 'Remove it from the dataset because it distorts the clusters.', verdict: 'bad', why: 'Throwing away the most unusual host defeats the purpose of anomaly detection.' },
+        { text: 'Increase k until the printer gets its own cluster.', verdict: 'partial', why: 'It might isolate it, but that hides the anomaly inside “normal” structure rather than explaining it.' }
+      ] }
+    ]
+  },
+  practice: {
+    intro: 'Step through k-means and flag outliers, then mine association rules from login sessions.',
+    blocks: [
+      { type: 'custom', title: 'k-means step-through', tag: 'Simulator', intro: 'Points are hosts (scaled features). Initialise, then alternate Assign and Update until nothing changes. Points beyond the outlier distance from their centroid are flagged.', render: function (host, K) {
+        var P = [[15,20],[18,25],[22,18],[12,28],[20,30],[25,22],[17,15],[23,27],[60,70],[65,75],[70,68],[62,80],[68,72],[72,78],[58,74],[66,66],[80,20],[84,25],[78,28],[86,18],[82,30],[45,95],[95,55],[40,45]];
+        var C = [], A = [], k = 3, phase = 'init', seed = 3;
+        var colors = ['#7dd3fc', '#fed7aa', '#c4b5fd', '#86efac'];
+        function rnd() { seed = (seed * 9301 + 49297) % 233280; return seed / 233280; }
+        var kSel = K.el('select', { id: 'km-k' }); [2, 3, 4].forEach(function (n) { kSel.appendChild(K.el('option', { value: String(n), text: 'k = ' + n, selected: n === 3 })); });
+        var thr = K.el('input', { type: 'range', min: '10', max: '40', value: '22', id: 'km-t' }), thrL = K.el('label', { for: 'km-t' });
+        var svg = K.el('div'), info = K.el('p', { class: 'small', 'aria-live': 'polite' });
+        var bInit = K.el('button', { type: 'button', class: 'btn', text: '1. Initialise' }), bAs = K.el('button', { type: 'button', class: 'btn', text: '2. Assign' }), bUp = K.el('button', { type: 'button', class: 'btn', text: '3. Update centroids' }), bRun = K.el('button', { type: 'button', class: 'btn btn-primary', text: 'Run to convergence' });
+        function d(a, b) { return Math.hypot(a[0] - b[0], a[1] - b[1]); }
+        function init() { k = +kSel.value; var idx = K.shuffle(P.map(function (_, i) { return i; })).slice(0, k); C = idx.map(function (i) { return P[i].slice(); }); A = []; phase = 'assign'; draw('Centroids placed on ' + k + ' random points.'); }
+        function assign() { if (!C.length) return init(); var ch = 0; P.forEach(function (p, i) { var best = 0; C.forEach(function (c, j) { if (d(p, c) < d(p, C[best])) best = j; }); if (A[i] !== best) ch++; A[i] = best; }); draw('Assigned each point to its nearest centroid (' + ch + ' changed).'); return ch; }
+        function update() { if (!A.length) return; var moved = 0; C = C.map(function (c, j) { var m = P.filter(function (_, i) { return A[i] === j; }); if (!m.length) return c; var n = [K.mean(m.map(function (p) { return p[0]; })), K.mean(m.map(function (p) { return p[1]; }))]; moved += d(n, c); return n; }); draw('Moved each centroid to the mean of its points (total movement ' + moved.toFixed(1) + ').'); return moved; }
+        function run() { if (!C.length) init(); for (var it = 0; it < 20; it++) { var ch = assign(); var mv = update(); if (ch === 0 && mv < 0.01) break; } assign(); draw('Converged. Outliers are flagged with a red ring.'); }
+        function draw(msg) {
+          var T = +thr.value; thrL.textContent = 'Outlier distance from centroid > ' + T;
+          var s = '<svg class="chart" viewBox="0 0 400 300" role="img" aria-label="Scatter plot of hosts with cluster centroids">', out = 0;
+          s += '<text x="200" y="295" text-anchor="middle" fill="#b2bdd8" font-size="11">connections / hour (scaled)</text><text x="10" y="150" fill="#b2bdd8" font-size="11" transform="rotate(-90 10 150)" text-anchor="middle">distinct destinations (scaled)</text>';
+          P.forEach(function (p, i) {
+            var x = 30 + p[0] * 3.5, y = 275 - p[1] * 2.6, col = A[i] != null ? colors[A[i]] : '#8f9cc0';
+            var isOut = A[i] != null && d(p, C[A[i]]) > T;
+            if (isOut) { out++; s += '<circle cx="' + x + '" cy="' + y + '" r="10" fill="none" stroke="#f87171" stroke-width="2.5"/>'; }
+            s += '<circle cx="' + x + '" cy="' + y + '" r="5" fill="' + col + '"/>';
+          });
+          C.forEach(function (c, j) { var x = 30 + c[0] * 3.5, y = 275 - c[1] * 2.6; s += '<path d="M' + (x - 8) + ' ' + y + 'h16M' + x + ' ' + (y - 8) + 'v16" stroke="' + colors[j] + '" stroke-width="3"/><circle cx="' + x + '" cy="' + y + '" r="9" fill="none" stroke="#fff" stroke-width="1.5"/>'; });
+          svg.innerHTML = s + '</svg>';
+          info.textContent = (msg || '') + (A.length ? ' Flagged outliers: ' + out + '.' : '');
+        }
+        bInit.addEventListener('click', init); bAs.addEventListener('click', assign); bUp.addEventListener('click', update); bRun.addEventListener('click', run);
+        thr.addEventListener('input', function () { draw(''); });
+        kSel.addEventListener('change', function () { C = []; A = []; draw('k changed — initialise again.'); });
+        host.appendChild(K.el('div', { class: 'sim-grid two' }, [K.el('div', { class: 'field' }, [K.el('label', { for: 'km-k', text: 'Number of clusters' }), kSel]), K.el('div', { class: 'field' }, [thrL, thr])]));
+        host.appendChild(K.el('div', { class: 'btn-row', style: 'margin:10px 0' }, [bInit, bAs, bUp, bRun]));
+        host.appendChild(svg); host.appendChild(info);
+        host.appendChild(K.el('p', { class: 'small muted', text: 'Try k = 2 and k = 4 and re-run a few times: results depend on k and on the random start. The three isolated hosts should stay flagged with sensible settings — DBSCAN would label them “noise” directly.' }));
+        draw('Press Initialise to start.');
+      } },
+      { type: 'custom', title: 'Association rules from login sessions', tag: 'Calculator', intro: 'Each row is one user session’s set of events. Pick a rule X → Y and compute its metrics.', render: function (host, K) {
+        var T = [['vpn_login', 'read_mail'], ['vpn_login', 'read_mail'], ['vpn_login', 'read_mail', 'failed_login'], ['vpn_login', 'read_mail'], ['vpn_login', 'failed_login', 'read_mail'], ['new_device', 'mfa_reset', 'mass_download'], ['vpn_login', 'read_mail', 'admin_tool'], ['new_device', 'mfa_reset', 'mass_download', 'failed_login'], ['vpn_login', 'read_mail'], ['vpn_login', 'read_mail', 'new_device'], ['new_device', 'mfa_reset', 'mass_download'], ['vpn_login', 'read_mail']];
+        var items = ['vpn_login', 'read_mail', 'failed_login', 'new_device', 'mfa_reset', 'mass_download', 'admin_tool'];
+        host.appendChild(K.el('div', { class: 'table-wrap' }, [K.el('table', { html: '<thead><tr><th>#</th><th>Session events</th></tr></thead><tbody>' + T.map(function (t, i) { return '<tr><td>' + (i + 1) + '</td><td class="log-line">' + t.join(', ') + '</td></tr>'; }).join('') + '</tbody>' })]));
+        var xs = K.el('select', { id: 'ar-x' }), ys = K.el('select', { id: 'ar-y' });
+        items.concat(['new_device + mfa_reset']).forEach(function (it) { xs.appendChild(K.el('option', { value: it, text: it })); });
+        items.forEach(function (it) { ys.appendChild(K.el('option', { value: it, text: it, selected: it === 'read_mail' })); });
+        var out = K.el('div', { class: 'metric-grid', style: 'margin-top:10px', 'aria-live': 'polite' }), fb = K.el('div', { class: 'feedback' });
+        function has(t, set) { return set.every(function (s) { return t.indexOf(s) !== -1; }); }
+        function calc() {
+          var X = xs.value.split(' + '), Y = [ys.value], n = T.length;
+          var sx = T.filter(function (t) { return has(t, X); }).length, sy = T.filter(function (t) { return has(t, Y); }).length, sxy = T.filter(function (t) { return has(t, X.concat(Y)); }).length;
+          var sup = sxy / n, conf = sx ? sxy / sx : 0, lift = sy ? conf / (sy / n) : 0;
+          out.innerHTML = '';
+          [['Support', (sup * 100).toFixed(0) + '%'], ['Confidence', (conf * 100).toFixed(0) + '%'], ['Lift', lift.toFixed(2)], ['Count X∪Y', sxy + ' / ' + n]].forEach(function (m) { out.appendChild(K.el('div', { class: 'metric' }, [K.el('b', { text: m[1] }), K.el('span', { text: m[0] })])); });
+          if (X.indexOf(Y[0]) !== -1) K.setFeedback(fb, 'partial', 'X already contains Y — pick a different consequent.', 'Trivial rule');
+          else if (lift > 1.5 && conf >= 0.8) K.setFeedback(fb, 'good', 'Strong, interesting rule: when X happens, Y follows far more often than its base rate. In a security context, “MFA reset → mass download” is a pattern worth an alert.', 'Interesting');
+          else if (lift > 1) K.setFeedback(fb, 'partial', 'Positive association, but weak or common. Lift only slightly above 1 often reflects ordinary behaviour (e.g. VPN users read mail).', 'Weak association');
+          else K.setFeedback(fb, 'bad', 'Lift ≤ 1: X does not make Y more likely than chance' + (conf > 0.5 ? ' — despite the decent confidence, because Y is common anyway.' : '.'), 'Not interesting');
+        }
+        xs.addEventListener('change', calc); ys.addEventListener('change', calc);
+        host.appendChild(K.el('div', { class: 'sim-grid two', style: 'margin-top:12px' }, [K.el('div', { class: 'field' }, [K.el('label', { for: 'ar-x', text: 'If session contains X (antecedent)' }), xs]), K.el('div', { class: 'field' }, [K.el('label', { for: 'ar-y', text: '…then it contains Y (consequent)' }), ys])]));
+        host.appendChild(out); host.appendChild(fb);
+        host.appendChild(K.el('p', { class: 'small muted', style: 'margin-top:8px', html: 'Formulas: support(X→Y) = P(X∪Y); confidence = P(X∪Y) / P(X); lift = confidence / P(Y). Try <code>failed_login → read_mail</code> and <code>mfa_reset → mass_download</code>.' }));
+        calc();
+      } }
+    ]
+  },
+  playbook: {
+    rules: [
+      ['Scale before you measure distance. ', 'Standardise features so no single unit dominates k-means or DBSCAN.'],
+      ['Validate the clusters. ', 'Name what each cluster represents; try different k and seeds; use silhouette or the elbow method.'],
+      ['Treat outliers as leads. ', 'Far-from-centroid points and DBSCAN noise are where you start investigating.'],
+      ['Judge rules by lift, not just confidence. ', 'Lift &gt; 1 with decent support is a pattern worth understanding.'],
+      ['Turn patterns into detections. ', 'A strong suspicious association (e.g. MFA reset → mass download) can become a correlation rule.'],
+      ['Re-run regularly. ', 'Environments change; yesterday’s clusters and rules drift.']
+    ],
+    quote: ['Unsupervised methods don’t tell you what is malicious. They tell you where to look.']
+  }
+});
+</script>
+</body>
+</html>

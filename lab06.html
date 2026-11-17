@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lab 06 — IDS Training</title>
+<link rel="stylesheet" href="module-kit.css">
+<script src="labs-access.js"></script>
+<script>LabsAccess.guard('lab06');</script>
+</head>
+<body>
+<div id="app"><noscript><p style="padding:16px">IDS Training needs JavaScript enabled.</p></noscript></div>
+<script src="module-kit.js"></script>
+<script src="questions.js"></script>
+<script src="assessment.js"></script>
+<script>
+ModuleKit.mount({
+  id: 'lab06',
+  briefing: {
+    hook: 'A detection that nobody sees is a log entry. A detection that pages someone 400 times a night is worse — it teaches the team to ignore alerts.',
+    lead: 'Alerting turns detections into action. Good alerts are <strong>specific</strong>, <strong>correctly prioritised</strong>, <strong>deduplicated</strong>, <strong>routed</strong> to the right people and come with a <strong>runbook</strong>. In this lab you tune a brute-force alert and decide what deserves a page versus a ticket.',
+    stats: [
+      { value: 'N in W', label: 'Count within a time window', note: 'Most user-behaviour alerts are “N events within W minutes, grouped by user or source”.' },
+      { value: '0–15', label: 'Wazuh rule levels', note: 'Wazuh/OSSEC rank alerts by level; by default only level 12+ is emailed and level 3+ is logged as an alert.' },
+      { value: '1', label: 'Runbook per alert', note: 'Every alert should say what it means, how to verify it and what to do next.' }
+    ],
+    objectives: [
+      'Design threshold-and-window alert rules grouped by the right field.',
+      'Assign severity based on impact and confidence.',
+      'Reduce alert fatigue with deduplication, suppression and enrichment.',
+      'Route alerts to the right channel with a clear runbook.'
+    ],
+    blocks: [{ type: 'myths', items: [
+      { myth: 'Every alert should be high severity — better safe than sorry.', fact: 'If everything is critical, nothing is. Severity must reflect impact and confidence so the team knows what to do first.' },
+      { myth: 'Email is a fine channel for urgent security alerts.', fact: 'Email is slow and easily filtered. Urgent alerts belong in a paging or on-call tool; email suits digests and low-priority tickets.' },
+      { myth: 'Suppressing an alert means ignoring a threat.', fact: 'Well-scoped suppression (a known scanner, a maintenance window) with an expiry date lets real alerts stand out.' }
+    ] }]
+  },
+  scenario: {
+    meta: ['Mid-size SaaS company', 'Wazuh → Slack', '3-person SOC'],
+    title: 'The channel everyone muted',
+    story: '<p>The SOC’s <code>#security-alerts</code> Slack channel receives about 1,200 messages a day. Most are “3 failed logins” alerts caused by users mistyping passwords and a monitoring service with an expired credential that fails every five minutes. Last Tuesday, a genuine password-spray alert sat unread for nine hours: two people had muted the channel.</p>',
+    blocks: [
+      { type: 'choice', title: 'Decision 1 — First fix', prompt: 'What should the team do first?', options: [
+        { text: 'Retune the brute-force rule (higher N, grouped by source, distinct usernames), fix the service credential and send low-severity alerts to a daily digest.', verdict: 'good', why: 'It removes the two largest noise sources at the root and keeps the channel for alerts that need a human now.' },
+        { text: 'Create a second channel and split the alerts between them alphabetically.', verdict: 'bad', why: 'The noise is still there — now in two places.' },
+        { text: 'Suppress all failed-login alerts for a month while they think about it.', verdict: 'partial', why: 'It stops the noise, but leaves them blind to password spraying — the very attack they just missed.' }
+      ] },
+      { type: 'choice', title: 'Decision 2 — The spray alert', prompt: 'How should a confirmed password-spray alert (one source, 40 usernames, 1 success) be delivered?', options: [
+        { text: 'High severity → page on-call, include source IP, usernames, the successful account and a link to the runbook.', verdict: 'good', why: 'A success after spraying means a likely compromised account: urgent, actionable, and enriched so triage can start immediately.' },
+        { text: 'Medium severity → ticket in the queue for the next business day.', verdict: 'partial', why: 'Correct that it needs a ticket, wrong urgency: a successful login after a spray should be investigated now.' },
+        { text: 'Low severity → included in the weekly email report.', verdict: 'bad', why: 'An attacker with valid credentials has days to act before anyone reads it.' }
+      ] }
+    ]
+  },
+  practice: {
+    intro: 'Tune a brute-force rule against an hour of real-looking authentication data, then triage alerts by urgency.',
+    blocks: [
+      { type: 'custom', title: 'Alert rule tuner: failed logons', tag: 'Simulator', intro: 'Rule: alert when a <strong>source</strong> has ≥ N failed logons within W minutes. Goal: catch both attackers, don’t alert on typos, and send the broken service to a ticket instead.', render: function (host, K) {
+        var sources = [
+          { name: '203.0.113.50 — password spray', kind: 'attack', t: (function () { var a = []; for (var i = 0; i < 30; i++) a.push(10 + i * 0.1); return a; })() },
+          { name: '198.51.100.7 — slow guessing', kind: 'attack', t: [5, 9, 13, 17, 21, 25, 29, 33, 37, 41, 45, 49] },
+          { name: '10.0.4.18 — monitoring svc, expired password', kind: 'service', t: [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55] },
+          { name: '10.0.2.31 — user typos (alice)', kind: 'benign', t: [12, 12.3, 12.6] },
+          { name: '10.0.2.44 — user typos (bob)', kind: 'benign', t: [40, 40.5, 41, 41.4] }
+        ];
+        function maxIn(t, w) { var m = 0; for (var i = 0; i < t.length; i++) { var c = 0; for (var j = i; j < t.length; j++) if (t[j] - t[i] < w) c++; if (c > m) m = c; } return m; }
+        var n = K.el('input', { type: 'range', min: '2', max: '30', value: '3', id: 'at-n' });
+        var w = K.el('input', { type: 'range', min: '1', max: '60', value: '5', id: 'at-w' });
+        var ln = K.el('label', { for: 'at-n' }), lw = K.el('label', { for: 'at-w' });
+        var table = K.el('div', { class: 'table-wrap' });
+        var fb = K.el('div', { class: 'feedback', 'aria-live': 'polite' });
+        function run() {
+          var N = +n.value, W = +w.value;
+          ln.textContent = 'N (failures) = ' + N; lw.textContent = 'W (window, minutes) = ' + W;
+          var rows = '', caught = 0, fp = 0, svc = false;
+          sources.forEach(function (s) {
+            var m = maxIn(s.t, W), hit = m >= N;
+            if (hit && s.kind === 'attack') caught++;
+            if (hit && s.kind === 'benign') fp++;
+            if (hit && s.kind === 'service') svc = true;
+            rows += '<tr><td>' + s.name + '</td><td>' + m + '</td><td>' + (hit ? '<span class="' + (s.kind === 'attack' ? 'status-good' : 'status-bad') + '">ALERT</span>' : (s.kind === 'attack' ? '<span class="status-bad">missed</span>' : '—')) + '</td></tr>';
+          });
+          table.innerHTML = '<table><thead><tr><th>Source</th><th>Max failures in W</th><th>Result</th></tr></thead><tbody>' + rows + '</tbody></table>';
+          var msg = 'Attackers caught: ' + caught + '/2 · typo false positives: ' + fp + ' · service alerting: ' + (svc ? 'yes' : 'no') + '.';
+          if (caught === 2 && fp === 0) K.setFeedback(fb, svc ? 'partial' : 'good', msg + (svc ? ' The broken service still fires — in real life you would fix the credential or route that host to a low-severity ticket rather than tune it away.' : ' Both attacks caught with no typo noise.'), svc ? 'Nearly there' : 'Well tuned');
+          else if (caught < 2) K.setFeedback(fb, 'bad', msg + ' A window that is too short or a count that is too high lets the slow attacker through.', 'Attack missed');
+          else K.setFeedback(fb, 'bad', msg + ' Typos are paging people — they will start ignoring this alert.', 'Too noisy');
+        }
+        n.addEventListener('input', run); w.addEventListener('input', run);
+        host.appendChild(K.el('div', { class: 'sim-grid two' }, [K.el('div', { class: 'field' }, [ln, n]), K.el('div', { class: 'field' }, [lw, w])]));
+        host.appendChild(table); host.appendChild(fb);
+        host.appendChild(K.el('p', { class: 'small muted', style: 'margin-top:8px', text: 'Hint: the slow guesser makes one attempt every 4 minutes. Real rules often add a second condition such as “≥ 10 distinct usernames from one source” to catch sprays even when they are slow.' }));
+        run();
+      } },
+      { type: 'sort', title: 'Page now or ticket?', left: 'Page on-call now', right: 'Ticket / digest', intro: 'Decide how each alert should be delivered.', items: [
+        { text: 'Successful logon right after a password spray from the same IP.', answer: 'left', why: 'Probable account compromise — act within minutes.' },
+        { text: 'One user failed MFA twice, then succeeded from their usual laptop.', answer: 'right', why: 'Common and low risk; useful for trend review only.' },
+        { text: 'Security event log cleared on a domain controller.', answer: 'left', why: 'High-impact anti-forensics on critical infrastructure.' },
+        { text: 'Antivirus signatures out of date on one kiosk PC.', answer: 'right', why: 'A hygiene issue for IT to fix, not an active incident.' },
+        { text: 'New member added to Domain Admins outside a change window.', answer: 'left', why: 'Privilege escalation to the most powerful group — verify immediately.' },
+        { text: 'Weekly summary of accounts with passwords older than 1 year.', answer: 'right', why: 'Compliance/hygiene reporting — a digest is perfect.' }
+      ] }
+    ]
+  },
+  playbook: {
+    rules: [
+      ['Group by the attacker’s key. ', 'Count per source IP for brute force, per username for credential stuffing, per host for malware.'],
+      ['Severity = impact × confidence. ', 'A likely success on a privileged account outranks a hundred failed guesses.'],
+      ['Deduplicate and aggregate. ', 'One alert with “37 events” beats 37 alerts. Use time windows and grouping.'],
+      ['Route by urgency. ', 'Page for act-now alerts, tickets for next-day work, digests for trends and hygiene.'],
+      ['Ship a runbook with every alert. ', 'What it means, how to verify, what to do, who to escalate to.'],
+      ['Review noise monthly. ', 'Track false-positive rates and fix root causes; suppressions get an owner and an expiry date.']
+    ],
+    quote: ['Alert fatigue isn’t a people problem. It’s a tuning problem that people pay for.']
+  }
+});
+</script>
+</body>
+</html>

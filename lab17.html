@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lab 17 — IDS Training</title>
+<link rel="stylesheet" href="module-kit.css">
+<script src="labs-access.js"></script>
+<script>LabsAccess.guard('lab17');</script>
+</head>
+<body>
+<div id="app"><noscript><p style="padding:16px">IDS Training needs JavaScript enabled.</p></noscript></div>
+<script src="module-kit.js"></script>
+<script src="questions.js"></script>
+<script src="assessment.js"></script>
+<script>
+ModuleKit.mount({
+  id: 'lab17',
+  briefing: {
+    hook: 'You don’t need machine learning to spot a flood. A mean, a standard deviation and a sensible window will catch more than you’d expect — if you understand their limits.',
+    lead: 'A <strong>statistical anomaly model</strong> learns what normal traffic looks like (mean μ and standard deviation σ of packets, bytes or connections per interval) and flags intervals that deviate by more than <em>k</em> standard deviations. The crucial design choices are the <strong>training window</strong>, whether the baseline is <strong>static or rolling</strong>, and the threshold <em>k</em>.',
+    stats: [
+      { value: 'μ ± kσ', label: 'The core model', note: 'Flag x when |x − μ| &gt; kσ. For roughly normal data, about 99.7% of values fall within 3σ.' },
+      { value: 'Rolling', label: 'Baselines must move', note: 'A moving window (or EWMA) adapts to daily cycles and growth that a fixed baseline treats as attacks.' },
+      { value: 'Median', label: 'Robust alternative', note: 'Median and MAD resist outliers that would inflate the mean and σ of your training data.' }
+    ],
+    objectives: [
+      'Compute mean, standard deviation and z-scores for traffic intervals.',
+      'Compare static and rolling baselines on the same data.',
+      'Explain why seasonality and outliers break naive models.',
+      'Implement a simple detector in Python.'
+    ],
+    blocks: [{ type: 'myths', items: [
+      { myth: 'Network traffic is normally distributed, so 3σ always means 0.3% false positives.', fact: 'Real traffic is bursty, skewed and seasonal. The 3σ rule is a starting point to tune, not a guarantee.' },
+      { myth: 'Train once on last month’s data and you’re done.', fact: 'Traffic grows and changes. Rolling windows or periodic retraining stop the model alerting on yesterday’s normal.' },
+      { myth: 'Statistical models detect all attacks.', fact: 'They detect volume and rate changes well (floods, scans, exfil spikes). Low-and-slow attacks that stay inside normal ranges slip through.' }
+    ] }]
+  },
+  scenario: {
+    meta: ['University web server', 'Packets/min', 'Exam-results day'],
+    title: 'Results day',
+    story: '<p>A z-score detector trained on a quiet week in the holidays flags every minute between 09:00 and 11:00 on exam-results day as “critical”. Students are simply checking their grades. At 10:32, hidden in the noise, a real SYN flood begins.</p>',
+    blocks: [
+      { type: 'choice', title: 'Decision — Improving the model', prompt: 'What change most improves this detector?', options: [
+        { text: 'Use a rolling baseline (e.g. the last 30–60 minutes, or the same hour on comparable days) so the model adapts to the busy period, and alert on sudden jumps relative to it.', verdict: 'good', why: 'The flood is a sharp change relative to the recent baseline, even on a busy day. A static holiday baseline can’t see that.' },
+        { text: 'Raise k from 3 to 10 so the busy period stops alerting.', verdict: 'partial', why: 'It quietens results day, but on normal days even large floods would go undetected.' },
+        { text: 'Disable the detector on high-traffic days.', verdict: 'bad', why: 'Attackers favour busy days precisely because defenders are distracted.' }
+      ] }
+    ]
+  },
+  practice: {
+    intro: 'Compare a static and a rolling baseline on 60 minutes of traffic, then study the Python version.',
+    blocks: [
+      { type: 'custom', title: 'Static vs rolling baseline', tag: 'Simulator', intro: 'Minutes 20–39 are a legitimate busy period. Minutes 50–51 are a real flood (★). Training for the static model = minutes 0–14.', render: function (host, K) {
+        var v = [], seed = 7;
+        function rnd() { seed = (seed * 9301 + 49297) % 233280; return seed / 233280; }
+        for (var i = 0; i < 60; i++) { var base = (i >= 20 && i < 40) ? 165 : 100; var x = base + (rnd() - 0.5) * 24; if (i === 50) x = 420; if (i === 51) x = 380; v.push(Math.round(x)); }
+        var truth = { 50: 1, 51: 1 };
+        var mode = 'static';
+        var mrow = K.el('div', { class: 'pill-row', role: 'group', 'aria-label': 'Baseline type' });
+        [['static', 'Static baseline (min 0–14)'], ['rolling', 'Rolling baseline (previous 10 min)']].forEach(function (m) {
+          var b = K.el('button', { type: 'button', class: 'toggle', 'aria-pressed': String(m[0] === mode), text: m[1] });
+          b.addEventListener('click', function () { mode = m[0]; K.$$('button', mrow).forEach(function (x) { x.setAttribute('aria-pressed', 'false'); }); b.setAttribute('aria-pressed', 'true'); draw(); });
+          mrow.appendChild(b);
+        });
+        var k = K.el('input', { type: 'range', min: '2', max: '6', step: '0.5', value: '3', id: 'k17' }), kl = K.el('label', { for: 'k17' });
+        var chart = K.el('div', { style: 'margin-top:10px' }), metrics = K.el('div', { class: 'metric-grid', 'aria-live': 'polite' }), fb = K.el('div', { class: 'feedback' });
+        function draw() {
+          var K_ = +k.value; kl.textContent = 'k = ' + K_;
+          var flags = [], upper = [], extreme = [];
+          var tr = v.slice(0, 15), sm = K.mean(tr), ss = K.std(tr);
+          v.forEach(function (x, i) {
+            var m, s;
+            if (mode === 'static') { m = sm; s = ss; }
+            else { var w = []; for (var j = Math.max(0, i - 10); j < i; j++) if (!extreme[j]) w.push(v[j]); if (w.length < 5) { w = v.slice(0, 5); } m = K.mean(w); s = Math.max(K.std(w), 3); }
+            upper.push(m + K_ * s);
+            flags[i] = i >= (mode === 'static' ? 15 : 5) && (x - m) / s > K_;
+            extreme[i] = flags[i] && (x - m) / s > 15;
+          });
+          var tp = 0, fp = 0, fn = 0;
+          flags.forEach(function (f, i) { if (f && truth[i]) tp++; else if (f) fp++; else if (truth[i]) fn++; });
+          chart.innerHTML = K.lineChart({ values: v, min: 0, max: 450, series2: upper, label: 'Packets per minute with threshold', highlight: function (x, i) { return flags[i] ? (truth[i] ? '#4ade80' : '#f87171') : (truth[i] ? '#fbbf24' : null); }, labels: v.map(function (_, i) { return truth[i] ? '★' : (i % 10 === 0 ? String(i) : ''); }) });
+          metrics.innerHTML = '';
+          [['Flood minutes caught', tp + ' / 2'], ['False alarms', fp], ['Missed', fn], ['Mode', mode]].forEach(function (m) { metrics.appendChild(K.el('div', { class: 'metric' }, [K.el('b', { text: String(m[1]) }), K.el('span', { text: m[0] })])); });
+          if (mode === 'static') K.setFeedback(fb, fp > 3 ? 'bad' : 'partial', 'The static model treats the whole busy period as an attack (red points). Its threshold (dashed purple) never moves.', fp > 3 ? 'Alert storm' : 'Static model');
+          else K.setFeedback(fb, fp <= 2 && tp === 2 ? 'good' : 'partial', 'The rolling threshold climbs with the busy period. A level shift alerts briefly, then becomes the new normal. Note the trick: <em>extreme</em> points (z above 15) are excluded from the window so the flood can’t “teach” the model that floods are normal.', fp <= 2 && tp === 2 ? 'Adaptive and accurate' : 'Rolling model');
+        }
+        k.addEventListener('input', draw);
+        host.appendChild(mrow);
+        host.appendChild(K.el('div', { class: 'field', style: 'margin-top:10px' }, [kl, k]));
+        host.appendChild(chart);
+        host.appendChild(K.el('div', { class: 'legend', html: '<span><i style="background:#4ade80"></i>flood caught</span><span><i style="background:#f87171"></i>false alarm</span><span><i style="background:#fbbf24"></i>missed</span><span><i style="background:#c4b5fd"></i>threshold μ+kσ</span>' }));
+        host.appendChild(metrics); host.appendChild(fb);
+        draw();
+      } },
+      { type: 'html', html: '<section class="card block"><h3 class="block-title"><span class="block-tag">Code</span>The same detector in Python (pandas)</h3><p class="muted">Run this in your lab VM on a CSV of per-minute packet counts (e.g. exported from Wireshark Statistics → I/O Graph, or from Zeek conn logs).</p><pre><code>import pandas as pd\n\ndf = pd.read_csv("traffic.csv", parse_dates=["minute"])   # columns: minute, packets\nwin, k = 10, 3.0\n\n# Rolling baseline from the PREVIOUS window (shift avoids using the current value)\nroll = df["packets"].shift(1).rolling(win, min_periods=5)\ndf["mu"] = roll.mean()\ndf["sigma"] = roll.std().clip(lower=3)          # floor avoids divide-by-tiny-σ\ndf["z"] = (df["packets"] - df["mu"]) / df["sigma"]\ndf["anomaly"] = df["z"] &gt; k\n\nprint(df.loc[df["anomaly"], ["minute", "packets", "z"]])</code></pre><p class="small muted">Extension: replace mean/std with median and MAD (<code>(x - median) / (1.4826 * MAD)</code>) for robustness to outliers, or add an hour-of-day term for seasonality.</p></section>' },
+      { type: 'sort', title: 'Good fit for a statistical volume model?', left: 'Good fit', right: 'Poor fit', items: [
+        { text: 'SYN flood: packets/s to one server jump 20×.', answer: 'left', why: 'A large, sudden volume change — exactly what μ ± kσ detects.' },
+        { text: 'Single SQL injection request inside normal web traffic.', answer: 'right', why: 'One malicious request doesn’t change volume; you need signatures or content inspection.' },
+        { text: 'A workstation suddenly uploading 30 GB overnight.', answer: 'left', why: 'Per-host bytes-out baseline catches it clearly.' },
+        { text: 'Attacker exfiltrating 50 KB/day disguised as normal HTTPS.', answer: 'right', why: 'Low-and-slow stays inside normal variance.' },
+        { text: 'Host contacting 400 distinct internal IPs in 5 minutes.', answer: 'left', why: 'Distinct-destination counts per host are a great statistical scan feature.' },
+        { text: 'Use of a stolen password from the user’s usual laptop.', answer: 'right', why: 'Traffic volume looks completely normal; identity signals are needed.' }
+      ] }
+    ]
+  },
+  playbook: {
+    rules: [
+      ['Pick a meaningful metric. ', 'Packets, bytes, connections or distinct destinations per interval — per host or per service, not just network-wide.'],
+      ['Train on clean, representative data. ', 'Cover normal cycles and exclude known incidents.'],
+      ['Let the baseline move. ', 'Rolling windows, EWMA or same-hour-last-week comparisons handle growth and seasonality.'],
+      ['Don’t let attacks poison the baseline. ', 'Exclude extreme flagged points from the rolling window.'],
+      ['Use robust statistics when data is spiky. ', 'Median and MAD resist outliers better than mean and σ.'],
+      ['Measure and tune k. ', 'Track detections, false alarms and misses; adjust per metric.']
+    ],
+    quote: ['Normal isn’t a number. It’s a number that changes — and your model has to change with it.']
+  }
+});
+</script>
+</body>
+</html>

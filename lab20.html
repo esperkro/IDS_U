@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lab 20 — IDS Training</title>
+<link rel="stylesheet" href="module-kit.css">
+<script src="labs-access.js"></script>
+<script>LabsAccess.guard('lab20');</script>
+</head>
+<body>
+<div id="app"><noscript><p style="padding:16px">IDS Training needs JavaScript enabled.</p></noscript></div>
+<script src="module-kit.js"></script>
+<script src="questions.js"></script>
+<script src="assessment.js"></script>
+<script>
+ModuleKit.mount({
+  id: 'lab20',
+  briefing: {
+    hook: 'You’ve used other people’s IDSs for nineteen labs. Now build your own — small, honest, and measured.',
+    lead: 'Every IDS, from Snort to a commercial UEBA, is a <strong>pipeline</strong>: collect data → parse and normalise → extract features → detect (rules and/or anomaly models) → alert → evaluate and improve. In this mini project you design that pipeline for SSH/auth logs, run detectors against labelled data and report precision and recall.',
+    stats: [
+      { value: '6', label: 'Pipeline stages', note: 'Collect, parse, features, detect, alert, evaluate. Skipping any one breaks the system.' },
+      { value: '2', label: 'Detection styles combined', note: 'Signature-style rules catch known patterns; anomaly scores catch the unusual. Good projects use both.' },
+      { value: 'Labels', label: 'Ground truth for evaluation', note: 'Without labelled attacks in your test data you can’t measure precision or recall.' }
+    ],
+    objectives: [
+      'Design an end-to-end log-analysis IDS pipeline.',
+      'Implement rule-based detectors over parsed events.',
+      'Evaluate detections against ground truth.',
+      'Document design choices, results and limitations.'
+    ],
+    blocks: [{ type: 'myths', items: [
+      { myth: 'A mini IDS must use machine learning to be impressive.', fact: 'Clear rules with honest evaluation beat an unexplained model. Add ML if it measurably improves results.' },
+      { myth: 'If it detects the attack you injected, it works.', fact: 'You also need to show it stays quiet on normal traffic and to report what it misses.' },
+      { myth: 'Parsing is the boring part.', fact: 'Most detection bugs are parsing bugs: wrong timestamps, missed log formats, IPs in the wrong field.' }
+    ] }]
+  },
+  scenario: {
+    meta: ['Mini project', 'Python', 'auth.log + labels'],
+    title: 'Your IDS, your rules',
+    story: '<p>You have two weeks of <code>auth.log</code> from the lab Ubuntu server, plus a labels file from your instructor listing which events were part of the red-team exercise (brute force, a successful guessed password, a login from a new country, and off-hours admin activity). Build a tool that reads the log and outputs alerts, then compare its alerts with the labels.</p>',
+    blocks: [
+      { type: 'choice', title: 'Decision — Scope', prompt: 'How should you scope the first version?', options: [
+        { text: 'One log source, four well-defined detectors, alert output as JSON, and an evaluation script — then iterate.', verdict: 'good', why: 'A thin end-to-end slice you can measure beats a half-built system with ten data sources.' },
+        { text: 'Ingest every log on the server and train a deep-learning model on all of it.', verdict: 'bad', why: 'No labels for most of the data, no baseline to compare with, and too big to finish or evaluate.' },
+        { text: 'Write the detectors but skip evaluation; the alerts speak for themselves.', verdict: 'partial', why: 'You would have no evidence of how well it works or what it misses.' }
+      ] }
+    ]
+  },
+  practice: {
+    intro: 'Order the pipeline, then configure and run your mini IDS on labelled events.',
+    blocks: [
+      { type: 'custom', title: 'Pipeline order', tag: 'Builder', intro: 'Arrange the stages into a working pipeline.', render: function (host, K) {
+        var st = ['Collect: read auth.log (tail or batch)', 'Parse & normalise: timestamp→UTC, user, IP, result', 'Feature extraction: failures per IP per window, hour, country', 'Detect: rules + anomaly thresholds', 'Alert: JSON with severity, evidence, rule id', 'Evaluate: compare with labels → precision, recall'];
+        var order = K.shuffle(st.map(function (_, i) { return i; }));
+        var list = K.el('ol', { class: 'tasks' }), fb = K.el('div', { class: 'feedback', 'aria-live': 'polite' });
+        function render(fi, dir) {
+          list.innerHTML = '';
+          order.forEach(function (e, pos) {
+            var up = K.el('button', { type: 'button', class: 'btn btn-sm', 'aria-label': 'Move up', text: '↑', disabled: pos === 0 });
+            var dn = K.el('button', { type: 'button', class: 'btn btn-sm', 'aria-label': 'Move down', text: '↓', disabled: pos === order.length - 1 });
+            up.addEventListener('click', function () { var t = order[pos]; order[pos] = order[pos - 1]; order[pos - 1] = t; render(pos - 1, 0); });
+            dn.addEventListener('click', function () { var t = order[pos]; order[pos] = order[pos + 1]; order[pos + 1] = t; render(pos + 1, 1); });
+            var li = K.el('li', {}, [K.el('span', { class: 'tick', text: String(pos + 1) }), K.el('span', { style: 'flex:1;min-width:0', text: st[e] }), K.el('span', { class: 'btn-row', style: 'flex:none;gap:4px' }, [up, dn])]);
+            li.style.alignItems = 'center'; list.appendChild(li);
+          });
+          if (fi != null) { var b = list.children[fi].querySelectorAll('button')[dir]; (b && !b.disabled ? b : list.children[fi].querySelector('button:not([disabled])')).focus(); }
+        }
+        var c = K.el('button', { type: 'button', class: 'btn btn-primary', style: 'margin-top:10px', text: 'Check order' });
+        c.addEventListener('click', function () { var r = order.filter(function (e, i) { return e === i; }).length; K.setFeedback(fb, r === st.length ? 'good' : 'bad', r === st.length ? 'Data flows from raw logs to measured alerts. Each stage can be tested on its own.' : r + ' of ' + st.length + ' in place. You can’t extract features before parsing, or evaluate before detecting.', r === st.length ? 'Pipeline correct' : 'Not yet'); });
+        render(); host.appendChild(list); host.appendChild(c); host.appendChild(fb);
+      } },
+      { type: 'custom', title: 'Mini IDS runner', tag: 'Simulator', intro: 'Enable detectors and set parameters, then run on 16 labelled events. Labels are hidden until evaluation.', render: function (host, K) {
+        var E = [
+          ['01:00', '203.0.113.9', 'root', 'fail', 'NL', 1], ['01:00', '203.0.113.9', 'admin', 'fail', 'NL', 1], ['01:01', '203.0.113.9', 'test', 'fail', 'NL', 1], ['01:01', '203.0.113.9', 'oracle', 'fail', 'NL', 1], ['01:02', '203.0.113.9', 'backup', 'fail', 'NL', 1], ['01:02', '203.0.113.9', 'backup', 'ok', 'NL', 1],
+          ['09:05', '10.0.0.21', 'priya', 'fail', 'IN', 0], ['09:05', '10.0.0.21', 'priya', 'ok', 'IN', 0], ['09:30', '10.0.0.34', 'arjun', 'ok', 'IN', 0],
+          ['11:15', '198.51.100.40', 'meera', 'ok', 'BR', 1], ['14:00', '10.0.0.21', 'priya', 'ok', 'IN', 0], ['16:45', '10.0.0.50', 'sysadmin', 'ok', 'IN', 0],
+          ['02:40', '10.0.0.50', 'sysadmin', 'ok', 'IN', 1], ['18:20', '10.0.0.34', 'arjun', 'fail', 'IN', 0], ['18:21', '10.0.0.34', 'arjun', 'fail', 'IN', 0], ['18:21', '10.0.0.34', 'arjun', 'ok', 'IN', 0]
+        ];
+        var D = [
+          { id: 'bf', name: 'Brute force: ≥ N failures from one IP within 5 min', param: ['N', 2, 10, 2] },
+          { id: 'saf', name: 'Success after ≥ N failures from the same IP', param: ['N', 1, 6, 1] },
+          { id: 'geo', name: 'Login from a country never seen for this user (home: IN)', param: null },
+          { id: 'off', name: 'Successful privileged login (root/sysadmin) between 00:00 and H:00', param: ['H', 1, 8, 5] }
+        ];
+        var ctl = K.el('div', { class: 'stack' });
+        D.forEach(function (d) {
+          var b = K.el('button', { type: 'button', class: 'toggle', 'aria-pressed': 'true', 'data-d': d.id, text: d.name });
+          b.addEventListener('click', function () { b.setAttribute('aria-pressed', String(b.getAttribute('aria-pressed') !== 'true')); });
+          var row = K.el('div', { class: 'field' }, [b]);
+          if (d.param) { var id = 'mi-' + d.id, inp = K.el('input', { type: 'number', id: id, min: String(d.param[1]), max: String(d.param[2]), value: String(d.param[3]), style: 'max-width:120px' }); row.appendChild(K.el('label', { for: id, class: 'small', text: d.param[0] + ' =' })); row.appendChild(inp); }
+          ctl.appendChild(row);
+        });
+        host.appendChild(ctl);
+        var run = K.el('button', { type: 'button', class: 'btn btn-primary', style: 'margin-top:12px', text: 'Run IDS & evaluate' });
+        var res = K.el('div', { class: 'table-wrap', style: 'margin-top:12px' }), m = K.el('div', { class: 'metric-grid', style: 'margin-top:10px', 'aria-live': 'polite' }), fb = K.el('div', { class: 'feedback' });
+        host.appendChild(run); host.appendChild(res); host.appendChild(m); host.appendChild(fb);
+        function on(id) { return host.querySelector('[data-d="' + id + '"]').getAttribute('aria-pressed') === 'true'; }
+        function p(id) { var x = host.querySelector('#mi-' + id); return x ? +x.value : 0; }
+        function mins(t) { return +t.slice(0, 2) * 60 + +t.slice(3); }
+        run.addEventListener('click', function () {
+          var flagged = E.map(function () { return []; });
+          E.forEach(function (e, i) {
+            var prior = E.slice(0, i).filter(function (x) { return x[1] === e[1] && x[3] === 'fail' && mins(e[0]) - mins(x[0]) <= 5 && mins(e[0]) >= mins(x[0]); });
+            if (on('bf') && e[3] === 'fail' && prior.length + 1 >= p('bf')) { flagged[i].push('BF'); E.forEach(function (x, j) { if (j < i && x[1] === e[1] && x[3] === 'fail' && mins(e[0]) - mins(x[0]) <= 5 && flagged[j].indexOf('BF') === -1) flagged[j].push('BF'); }); }
+            if (on('saf') && e[3] === 'ok' && prior.length >= p('saf')) flagged[i].push('SAF');
+            if (on('geo') && e[3] === 'ok' && e[4] !== 'IN') flagged[i].push('GEO');
+            if (on('off') && e[3] === 'ok' && /^(root|sysadmin)$/.test(e[2]) && mins(e[0]) < p('off') * 60) flagged[i].push('OFF');
+          });
+          var tp = 0, fp = 0, fn = 0, rows = '';
+          E.forEach(function (e, i) {
+            var f = flagged[i].length > 0;
+            if (f && e[5]) tp++; else if (f) fp++; else if (e[5]) fn++;
+            rows += '<tr><td class="log-line">' + e[0] + '</td><td class="log-line">' + e[1] + '</td><td>' + e[2] + '</td><td>' + e[3] + '</td><td>' + e[4] + '</td><td>' + (f ? flagged[i].join(',') : '—') + '</td><td class="' + (f === !!e[5] ? 'status-good' : 'status-bad') + '">' + (e[5] ? 'attack' : 'benign') + '</td></tr>';
+          });
+          res.innerHTML = '<table><thead><tr><th>Time</th><th>IP</th><th>User</th><th>Result</th><th>Geo</th><th>Alerts</th><th>Label</th></tr></thead><tbody>' + rows + '</tbody></table>';
+          var prec = tp + fp ? tp / (tp + fp) : 0, rec = tp / (tp + fn);
+          m.innerHTML = '';
+          [['TP', tp], ['FP', fp], ['Precision', (prec * 100).toFixed(0) + '%'], ['Recall', (rec * 100).toFixed(0) + '%']].forEach(function (x) { m.appendChild(K.el('div', { class: 'metric' }, [K.el('b', { text: String(x[1]) }), K.el('span', { text: x[0] })])); });
+          var v = prec >= 0.85 && rec >= 0.85 ? 'good' : prec >= 0.6 && rec >= 0.6 ? 'partial' : 'bad';
+          K.setFeedback(fb, v, v === 'good' ? 'Strong result on this data. In your report, note the limits: only 16 events, one log source, and thresholds tuned on the same data you evaluated on — use a separate test week next.' : 'Look at the red label cells: are you missing the first brute-force failures (N too high) or flagging arjun’s and priya’s typos (N too low)? Is any detector switched off?', v === 'good' ? 'Detector suite working' : 'Tune and re-run');
+        });
+      } },
+      { type: 'html', html: '<section class="card block"><h3 class="block-title"><span class="block-tag">Code</span>Starter skeleton (Python 3)</h3><pre><code>import re, json\nfrom collections import defaultdict, deque\nfrom datetime import datetime\n\nPAT = re.compile(r"^(?P&lt;ts&gt;\\w{3}\\s+\\d+\\s[\\d:]+).*sshd\\[\\d+\\]: (?P&lt;res&gt;Failed|Accepted) \\S+ for (invalid user )?(?P&lt;user&gt;\\S+) from (?P&lt;ip&gt;[\\d.]+)")\nfails = defaultdict(deque)          # ip -&gt; timestamps of recent failures\nWINDOW, N = 300, 4                  # seconds, failures\n\ndef alert(rule, sev, ev, **extra):\n    print(json.dumps({"rule": rule, "severity": sev, **ev, **extra}))\n\nfor line in open("auth.log"):\n    m = PAT.search(line)\n    if not m: continue\n    ev = m.groupdict()\n    t = datetime.strptime(ev["ts"], "%b %d %H:%M:%S").replace(year=2026).timestamp()\n    q = fails[ev["ip"]]\n    while q and t - q[0] &gt; WINDOW: q.popleft()\n    if ev["res"] == "Failed":\n        q.append(t)\n        if len(q) &gt;= N: alert("BRUTE_FORCE", "medium", ev, failures=len(q))\n    elif len(q) &gt;= 3:\n        alert("SUCCESS_AFTER_FAILURES", "high", ev, failures=len(q))</code></pre><p class="small muted">Then: add geo and off-hours detectors, write alerts to a file, and an <code>evaluate.py</code> that joins alerts with the labels file to compute precision and recall.</p></section>' },
+      { type: 'checklist', title: 'Project rubric self-check', tag: 'Rubric', scoreLabel: 'Project readiness', items: [
+        { text: 'Architecture diagram of the pipeline', weight: 2, why: 'Shows design thinking at a glance.' },
+        { text: 'Parser handles every log format in the dataset (with tests)', weight: 2, why: 'Detection quality depends on parsing.' },
+        { text: 'Each detector documented: logic, parameters, MITRE ATT&amp;CK technique', weight: 2, why: 'e.g. T1110 Brute Force, T1078 Valid Accounts.' },
+        { text: 'Evaluation on held-out labelled data with precision and recall', weight: 2, why: 'The evidence that it works.' },
+        { text: 'Limitations and false-negative analysis', weight: 2, why: 'Shows you understand what it can’t do.' },
+        { text: 'Tested only on the isolated lab and provided datasets', weight: 1, why: 'Legal and ethical scope.' },
+        { text: 'Report only the best run and hide failed experiments', weight: -3, why: 'Cherry-picking misrepresents performance.' }
+      ] }
+    ]
+  },
+  playbook: {
+    rules: [
+      ['Build a thin slice end to end. ', 'One data source through every stage before adding more.'],
+      ['Parse carefully, test the parser. ', 'Normalise timestamps to UTC and verify every field.'],
+      ['Combine rules and anomaly scores. ', 'Rules for known patterns, statistics for the unusual.'],
+      ['Make alerts actionable. ', 'Rule id, severity, evidence and a plain-language explanation.'],
+      ['Evaluate on data you didn’t tune on. ', 'Precision, recall and the misses — with a separate test period.'],
+      ['Document limits honestly. ', 'What it can’t see is as important as what it can.']
+    ],
+    quote: ['An IDS you built and measured beats an IDS you installed and trusted.']
+  }
+});
+</script>
+</body>
+</html>

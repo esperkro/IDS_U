@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lab 03 — IDS Training</title>
+<link rel="stylesheet" href="module-kit.css">
+<script src="labs-access.js"></script>
+<script>LabsAccess.guard('lab03');</script>
+</head>
+<body>
+<div id="app"><noscript><p style="padding:16px">IDS Training needs JavaScript enabled.</p></noscript></div>
+<script src="module-kit.js"></script>
+<script src="questions.js"></script>
+<script src="assessment.js"></script>
+<script>
+ModuleKit.mount({
+  id: 'lab03',
+  briefing: {
+    hook: 'Windows records almost everything an attacker does — <em>if</em> you ask it to. Out of the box, many of the events investigators need most are simply not collected.',
+    lead: 'Windows Security Auditing writes to the <strong>Security</strong> event log. You control it through <strong>Advanced Audit Policy Configuration</strong> (Group Policy or local policy) and the <code>auditpol</code> command. In this lab you switch on the right subcategories and learn to read the event IDs that matter.',
+    stats: [
+      { value: '4624 / 4625', label: 'Successful vs failed logon', note: 'The two events behind most brute-force, password-spraying and lateral-movement detections.' },
+      { value: '4688', label: 'A new process was created', note: 'Turn on “Include command line in process creation events” to see the full command, e.g. encoded PowerShell.' },
+      { value: '1102', label: 'The audit log was cleared', note: 'Rarely legitimate on a workstation and a classic sign of an intruder covering tracks.' }
+    ],
+    objectives: [
+      'Configure Advanced Audit Policy subcategories with Group Policy or <code>auditpol</code>.',
+      'Enable command-line logging for process creation.',
+      'Recognise key Security event IDs and logon types.',
+      'Query the Security log with <code>Get-WinEvent</code>.'
+    ],
+    blocks: [{ type: 'myths', items: [
+      { myth: 'Windows logs failed logons by default, so we’re covered.', fact: 'Defaults vary by version and role, and many useful subcategories (process creation, account management detail) are off or success-only. Verify with <code>auditpol /get /category:*</code>.' },
+      { myth: 'Basic and Advanced audit policies can be mixed freely.', fact: 'Mixing them causes unpredictable results. Use Advanced Audit Policy and enable “Force audit policy subcategory settings… to override audit policy category settings”.' },
+      { myth: 'Logon type doesn’t matter — a logon is a logon.', fact: 'Type 2 is interactive (keyboard), 3 is network (e.g. file share), 10 is RemoteInteractive (RDP). An admin type-10 logon at 2 a.m. tells a very different story from a type-3 share access.' }
+    ] }]
+  },
+  scenario: {
+    meta: ['Accounting firm, 25 users', 'Windows 10/11 + AD', 'After a phishing scare'],
+    title: 'The audit policy that saw nothing',
+    story: '<p>A user at a small accounting firm opened a malicious attachment last week. Antivirus caught something, but when the IT contractor opened Event Viewer to work out what happened, the Security log only contained successful logons — no process creation, no account changes, and it had already rolled over twice.</p><p>The owner asks you to “turn on proper auditing” across all 25 machines before it happens again.</p>',
+    blocks: [
+      { type: 'choice', title: 'Decision 1 — How do you deploy it?', prompt: 'What is the most reliable way to configure auditing on all 25 machines?', options: [
+        { text: 'A domain <strong>GPO</strong> with Advanced Audit Policy subcategories, the “force subcategory settings” option, command-line logging and a larger Security log size.', verdict: 'good', why: 'Central, consistent and enforced on every refresh. Raising the log size stops evidence rolling over in days.' },
+        { text: 'Run <code>auditpol /set</code> by hand on each machine.', verdict: 'partial', why: 'It works, but it is easy to miss a machine, drifts over time and is not re-applied if someone changes it.' },
+        { text: 'Enable <em>every</em> success and failure subcategory everywhere.', verdict: 'bad', why: 'Object Access and Filtering Platform subcategories alone can generate enormous noise and push useful events out of the log.' }
+      ] },
+      { type: 'choice', title: 'Decision 2 — Which subcategories first?', prompt: 'If you could only enable a handful, which set gives the most investigative value?', options: [
+        { text: 'Logon (S/F), Credential Validation (S/F), Process Creation (S) with command line, User/Security Group Management (S), Audit Policy Change (S).', verdict: 'good', why: 'These cover who logged on, how they authenticated, what they ran, what accounts and groups changed, and whether anyone tampered with auditing.' },
+        { text: 'File System and Registry auditing on every drive and hive.', verdict: 'bad', why: 'Object access auditing needs SACLs and careful scoping; enabled broadly it buries everything else.' },
+        { text: 'Logon success only, plus Account Lockout.', verdict: 'partial', why: 'Better than nothing, but you would still miss failed logons, executed processes and account manipulation.' }
+      ] }
+    ]
+  },
+  practice: {
+    intro: 'Configure auditing from an elevated PowerShell prompt, then read a Security log like an analyst.',
+    blocks: [
+      { type: 'terminal', title: 'auditpol and Get-WinEvent', host: 'Administrator: Windows PowerShell — WS-ACC-07', prompt: 'PS C:\\>', motd: 'Elevated PowerShell on a Windows 11 workstation.', tasks: [
+        { goal: 'Show current settings for every category: <code>auditpol /get /category:*</code>', match: /^auditpol\s+\/get\s+\/category:\*$/i, hint: 'auditpol /get /category:*', output: 'System audit policy\nCategory/Subcategory                      Setting\nLogon/Logoff\n  Logon                                   Success\n  Logoff                                  Success\nDetailed Tracking\n  Process Creation                        No Auditing\nAccount Management\n  User Account Management                 Success\n...' },
+        { goal: 'Audit success <em>and</em> failure for the Logon subcategory', match: /^auditpol\s+\/set\s+\/subcategory:"?logon"?\s+\/success:enable\s+\/failure:enable$/i, hint: 'auditpol /set /subcategory:"Logon" /success:enable /failure:enable', output: 'The command was successfully executed.' },
+        { goal: 'Audit successful Process Creation (event 4688)', match: /^auditpol\s+\/set\s+\/subcategory:"process creation"\s+\/success:enable$/i, hint: 'auditpol /set /subcategory:"Process Creation" /success:enable', output: 'The command was successfully executed.', note: 'Also enable the GPO “Include command line in process creation events”.' },
+        { goal: 'Pull the 5 newest failed logons from the Security log', match: /^get-winevent\s+-filterhashtable\s+@\{\s*logname\s*=\s*['"]security['"]\s*;\s*id\s*=\s*4625\s*\}\s+-maxevents\s+5$/i, hint: "Get-WinEvent -FilterHashtable @{LogName='Security'; Id=4625} -MaxEvents 5", output: 'TimeCreated            Id  Message\n-----------            --  -------\n17/11/2026 02:13:58  4625  An account failed to log on. Account Name: administrator  Logon Type: 3  Source: 10.0.5.23\n17/11/2026 02:13:57  4625  An account failed to log on. Account Name: administrator  Logon Type: 3  Source: 10.0.5.23\n17/11/2026 02:13:57  4625  An account failed to log on. Account Name: admin  Logon Type: 3  Source: 10.0.5.23\n...' }
+      ], extra: [
+        { match: /^auditpol\s+\/get\s+\/subcategory:/i, output: 'Logon/Logoff\n  Logon                                   Success and Failure' },
+        { match: /^wevtutil\s+cl\s+security$/i, output: 'Blocked in this simulator — clearing the log generates event 1102 and destroys evidence.', err: true }
+      ], success: 'Logon success/failure and process creation are now audited, and you can pull specific events with <code>Get-WinEvent</code>.' },
+      { type: 'redflags', title: 'Event Viewer at 02:00', intro: 'An extract from WS-ACC-07’s Security log (newest last). Tap each event you think deserves investigation.', header: 'Event Viewer › Windows Logs › Security', dark: true, mono: true, items: [
+        { text: '08:57  4624  Logon  alice  Type 2  WS-ACC-07', flag: false, why: 'Interactive logon by the machine’s normal user at the start of the working day.' },
+        { text: '02:11–02:13  4625 ×37  administrator / admin / acct  Type 3  from 10.0.5.23', flag: true, why: 'Dozens of network logon failures against several admin-style names in two minutes — password guessing.' },
+        { text: '02:14  4624  Logon  administrator  Type 10  from 10.0.5.23', flag: true, why: 'A successful RDP logon (type 10) from the same source straight after the failures: the guessing likely worked.' },
+        { text: '02:14  4672  Special privileges assigned  administrator', flag: true, why: 'On its own 4672 is routine for admins; here it confirms the suspicious session is privileged.' },
+        { text: '02:16  4688  powershell.exe -nop -w hidden -enc JABjAGwAaQBlAG4AdAA…', flag: true, why: 'Hidden window, no profile and a base64-encoded command — a very common malicious PowerShell pattern.' },
+        { text: '02:19  4720  User account created  svc_backup2  by administrator', flag: true, why: 'A new account created in the middle of the night by the compromised session — likely persistence.' },
+        { text: '02:19  4732  Member added to Administrators  svc_backup2', flag: true, why: 'The new account is immediately made a local admin.' },
+        { text: '12:30  4688  chrome.exe  parent explorer.exe  user alice', flag: false, why: 'Normal user launching a browser from the desktop.' },
+        { text: '02:31  1102  The audit log was cleared  by administrator', flag: true, why: 'Log clearing right after the activity is a strong anti-forensics indicator.' },
+        { text: '17:32  4634  Logoff  alice  Type 2', flag: false, why: 'End-of-day logoff matching the morning logon.' }
+      ] }
+    ]
+  },
+  playbook: {
+    rules: [
+      ['Use Advanced Audit Policy only. ', 'Enable “Force audit policy subcategory settings to override category settings” so legacy policy can’t interfere.'],
+      ['Turn on the investigative core. ', 'Logon, Credential Validation, Process Creation (+ command line), Account and Security Group Management, Audit Policy Change.'],
+      ['Read the logon type. ', '2 = interactive, 3 = network, 10 = RDP, 4/5 = batch/service. The type changes the meaning of 4624 and 4625.'],
+      ['Size the log for your investigation window. ', 'A small Security log can roll over in hours. Increase it and forward events to a collector or SIEM.'],
+      ['Alert on tampering. ', 'Event 1102 (log cleared) and 4719 (audit policy changed) should always be reviewed.'],
+      ['Deploy by GPO, verify by auditpol. ', 'Central policy keeps machines consistent; <code>auditpol /get /category:*</code> proves what is really applied.']
+    ],
+    quote: ['The event you need is the one you didn’t enable. Decide what you will investigate before the incident, not during it.']
+  }
+});
+</script>
+</body>
+</html>
